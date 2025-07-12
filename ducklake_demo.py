@@ -26,7 +26,6 @@ import os
 import shutil
 import subprocess
 import time
-import urllib.request
 
 import click
 import duckdb
@@ -35,6 +34,7 @@ import pandas as pd
 from click import Context
 from rich import box
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
@@ -43,10 +43,12 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
+from rich.syntax import Syntax
 from rich.table import Table
 
 # Initialize rich console and logger
 console = Console()
+
 
 # Configure logging to be less intrusive during demo
 class RichHandler(logging.Handler):
@@ -55,14 +57,17 @@ class RichHandler(logging.Handler):
         if record.levelno >= logging.WARNING:
             console.print(f"[yellow]{self.format(record)}[/yellow]")
 
+
 # Set up logging with custom handler
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Add file handler for all logs
-file_handler = logging.FileHandler('ducklake_demo.log')
+file_handler = logging.FileHandler("ducklake_demo.log")
 file_handler.setLevel(logging.INFO)
-file_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+file_formatter = logging.Formatter(
+    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 file_handler.setFormatter(file_formatter)
 logger.addHandler(file_handler)
 
@@ -273,7 +278,7 @@ def create_sample_data(conn: duckdb.DuckDBPyConnection) -> bool | None:
         "sale_date": pd.date_range("2023-01-01", periods=500, freq="h"),
         "region": np.random.choice(["North", "South", "East", "West"], 500),
     }
-    sales_df = pd.DataFrame(sales_info)
+    pd.DataFrame(sales_info)
 
     with console.status("[bold blue]Creating sales table..."):
         try:
@@ -822,9 +827,7 @@ def demonstrate_data_compression() -> bool:
 
 def explore_parquet_files() -> bool:
     """Explore the Parquet files created by DuckLake."""
-    console.print(
-        "[bold blue]Exploring DuckLake Parquet file structure...[/bold blue]"
-    )
+    console.print("[bold blue]Exploring DuckLake Parquet file structure...[/bold blue]")
 
     lake_data_dir = "./ducklake_data"
     if not os.path.exists(lake_data_dir):
@@ -946,103 +949,117 @@ Columns: {len(file_schema) if not file_schema.empty else "N/A"}"""
 
 def demonstrate_large_dataset(conn: duckdb.DuckDBPyConnection) -> bool:
     """Demonstrate DuckLake with a larger dataset, using synthetic data generation as fallback."""
-    console.print("\n[bold blue]Loading larger dataset for performance testing...[/bold blue]")
-    
+    console.print(
+        "\n[bold blue]Loading larger dataset for performance testing...[/bold blue]"
+    )
+
     # Try external datasets first, fallback to synthetic data generation
     external_datasets = [
         {
             "name": "Customers (External)",
             "url": "https://drive.google.com/uc?id=1N1xoxgcw2K3d-49tlchXAWw4wuxLj7EV&export=download",
             "table": "customers_large",
-            "description": "100k records of customer data from GitHub samples"
+            "description": "100k records of customer data from GitHub samples",
         },
         {
             "name": "People (External)",
             "url": "https://drive.google.com/uc?id=1NW7EnwxuY6RpMIxOazRVibOYrZfMjsb2&export=download",
             "table": "people_large",
-            "description": "100k records of people demographics from GitHub samples"
+            "description": "100k records of people demographics from GitHub samples",
         },
         {
             "name": "Organizations (External)",
             "url": "https://drive.google.com/uc?id=1g4wqEIsKyiBWeCAwd0wEkiC4Psc4zwFu&export=download",
             "table": "organizations_large",
-            "description": "100k records of organization data from GitHub samples"
-        }
+            "description": "100k records of organization data from GitHub samples",
+        },
     ]
-    
+
     loaded_datasets = []
-    
+
     # Try to load external datasets first
     console.print("[cyan]Attempting to load external datasets...[/cyan]")
-    
+
     for dataset in external_datasets:
         try:
             with console.status(f"[bold blue]Loading {dataset['name']}..."):
                 start_time = time.time()
-                
+
                 # Create table from CSV URL
                 conn.execute(f"""
-                CREATE OR REPLACE TABLE {dataset['table']} AS 
-                SELECT * FROM read_csv_auto('{dataset['url']}')
+                CREATE OR REPLACE TABLE {dataset["table"]} AS 
+                SELECT * FROM read_csv_auto('{dataset["url"]}')
                 """)
-                
+
                 # Get row count
-                count_result = conn.execute(f"SELECT COUNT(*) FROM {dataset['table']}").fetchone()
+                count_result = conn.execute(
+                    f"SELECT COUNT(*) FROM {dataset['table']}"
+                ).fetchone()
                 row_count = count_result[0] if count_result else 0
-                
+
                 load_time = time.time() - start_time
-                
+
                 if row_count > 0:
-                    loaded_datasets.append({
-                        "name": dataset['name'],
-                        "table": dataset['table'],
-                        "rows": row_count,
-                        "load_time": round(load_time, 2),
-                        "description": dataset['description'],
-                        "source": "external"
-                    })
-                    
-                    console.print(f"   ✓ [green]{dataset['name']}[/green]: [blue]{row_count:,} rows[/blue] in [yellow]{load_time:.2f}s[/yellow]")
-                    logger.info(f"Loaded {dataset['name']}: {row_count} rows in {load_time:.2f}s")
-                
+                    loaded_datasets.append(
+                        {
+                            "name": dataset["name"],
+                            "table": dataset["table"],
+                            "rows": row_count,
+                            "load_time": round(load_time, 2),
+                            "description": dataset["description"],
+                            "source": "external",
+                        }
+                    )
+
+                    console.print(
+                        f"   ✓ [green]{dataset['name']}[/green]: [blue]{row_count:,} rows[/blue] in [yellow]{load_time:.2f}s[/yellow]"
+                    )
+                    logger.info(
+                        f"Loaded {dataset['name']}: {row_count} rows in {load_time:.2f}s"
+                    )
+
         except Exception as e:
-            console.print(f"   ⚠ [yellow]External dataset {dataset['name']} failed:[/yellow] {str(e)[:100]}...")
+            console.print(
+                f"   ⚠ [yellow]External dataset {dataset['name']} failed:[/yellow] {str(e)[:100]}..."
+            )
             logger.warning(f"Failed to load external dataset {dataset['name']}: {e}")
-    
+
     # If external datasets failed, generate synthetic large datasets
     if not loaded_datasets:
-        console.print("[cyan]Generating synthetic large datasets for demonstration...[/cyan]")
-        
+        console.print(
+            "[cyan]Generating synthetic large datasets for demonstration...[/cyan]"
+        )
+
         synthetic_datasets = [
             {
                 "name": "Large Customers (Synthetic)",
-                "table": "customers_synthetic", 
+                "table": "customers_synthetic",
                 "rows": 50000,
-                "description": "50k synthetic customer records"
+                "description": "50k synthetic customer records",
             },
             {
                 "name": "Large Orders (Synthetic)",
                 "table": "orders_synthetic",
-                "rows": 100000, 
-                "description": "100k synthetic order records"
+                "rows": 100000,
+                "description": "100k synthetic order records",
             },
             {
                 "name": "Large Products (Synthetic)",
                 "table": "products_synthetic",
                 "rows": 25000,
-                "description": "25k synthetic product records"
-            }
+                "description": "25k synthetic product records",
+            },
         ]
-        
+
         for dataset in synthetic_datasets:
             try:
                 with console.status(f"[bold blue]Generating {dataset['name']}..."):
                     start_time = time.time()
-                    
-                    if dataset['table'] == 'customers_synthetic':
+
+                    if dataset["table"] == "customers_synthetic":
                         # Generate large customer dataset
                         conn.execute(f"""
-                        CREATE OR REPLACE TABLE {dataset['table']} AS
+                        CREATE OR REPLACE TABLE {dataset["table"]} AS
                         SELECT 
                             row_number() OVER () as customer_id,
                             'Customer ' || (row_number() OVER ()) as name,
@@ -1056,13 +1073,13 @@ def demonstrate_large_dataset(conn: duckdb.DuckDBPyConnection) -> bool:
                                 (random() * 3)::int + 1
                             ] as tier,
                             random() * 10000 as lifetime_value
-                        FROM generate_series(1, {dataset['rows']})
+                        FROM generate_series(1, {dataset["rows"]})
                         """)
-                    
-                    elif dataset['table'] == 'orders_synthetic':
-                        # Generate large orders dataset  
+
+                    elif dataset["table"] == "orders_synthetic":
+                        # Generate large orders dataset
                         conn.execute(f"""
-                        CREATE OR REPLACE TABLE {dataset['table']} AS
+                        CREATE OR REPLACE TABLE {dataset["table"]} AS
                         SELECT 
                             row_number() OVER () as order_id,
                             (random() * 50000 + 1)::int as customer_id,
@@ -1077,13 +1094,13 @@ def demonstrate_large_dataset(conn: duckdb.DuckDBPyConnection) -> bool:
                             ['completed', 'pending', 'shipped', 'cancelled'][
                                 (random() * 4)::int + 1
                             ] as status
-                        FROM generate_series(1, {dataset['rows']})
+                        FROM generate_series(1, {dataset["rows"]})
                         """)
-                    
-                    elif dataset['table'] == 'products_synthetic':
+
+                    elif dataset["table"] == "products_synthetic":
                         # Generate large products dataset
                         conn.execute(f"""
-                        CREATE OR REPLACE TABLE {dataset['table']} AS
+                        CREATE OR REPLACE TABLE {dataset["table"]} AS
                         SELECT 
                             row_number() OVER () as product_id,
                             'Product ' || (row_number() OVER ()) as name,
@@ -1095,105 +1112,182 @@ def demonstrate_large_dataset(conn: duckdb.DuckDBPyConnection) -> bool:
                             (random() * 1000)::int as stock_quantity,
                             random() > 0.1 as is_active,
                             round((random() * 4 + 1)::numeric, 1) as rating
-                        FROM generate_series(1, {dataset['rows']})
+                        FROM generate_series(1, {dataset["rows"]})
                         """)
-                    
+
                     # Get actual row count
-                    count_result = conn.execute(f"SELECT COUNT(*) FROM {dataset['table']}").fetchone()
+                    count_result = conn.execute(
+                        f"SELECT COUNT(*) FROM {dataset['table']}"
+                    ).fetchone()
                     actual_rows = count_result[0] if count_result else 0
-                    
+
                     load_time = time.time() - start_time
-                    
-                    loaded_datasets.append({
-                        "name": dataset['name'],
-                        "table": dataset['table'],
-                        "rows": actual_rows,
-                        "load_time": round(load_time, 2),
-                        "description": dataset['description'],
-                        "source": "synthetic"
-                    })
-                    
-                    console.print(f"   ✓ [green]{dataset['name']}[/green]: [blue]{actual_rows:,} rows[/blue] in [yellow]{load_time:.2f}s[/yellow]")
-                    logger.info(f"Generated {dataset['name']}: {actual_rows} rows in {load_time:.2f}s")
-                    
+
+                    loaded_datasets.append(
+                        {
+                            "name": dataset["name"],
+                            "table": dataset["table"],
+                            "rows": actual_rows,
+                            "load_time": round(load_time, 2),
+                            "description": dataset["description"],
+                            "source": "synthetic",
+                        }
+                    )
+
+                    console.print(
+                        f"   ✓ [green]{dataset['name']}[/green]: [blue]{actual_rows:,} rows[/blue] in [yellow]{load_time:.2f}s[/yellow]"
+                    )
+                    logger.info(
+                        f"Generated {dataset['name']}: {actual_rows} rows in {load_time:.2f}s"
+                    )
+
             except Exception as e:
-                console.print(f"   ✗ [red]Failed to generate {dataset['name']}:[/red] {e}")
-                logger.error(f"Failed to generate synthetic dataset {dataset['name']}: {e}")
-    
+                console.print(
+                    f"   ✗ [red]Failed to generate {dataset['name']}:[/red] {e}"
+                )
+                logger.error(
+                    f"Failed to generate synthetic dataset {dataset['name']}: {e}"
+                )
+
     if not loaded_datasets:
         console.print(" [red]No datasets loaded successfully[/red]")
         return False
-    
+
     # Brief summary instead of detailed table
-    total_rows = sum(d['rows'] for d in loaded_datasets)
-    total_load_time = sum(d['load_time'] for d in loaded_datasets)
-    console.print(f"\n✓ [green]Successfully loaded {len(loaded_datasets)} datasets: [bold]{total_rows:,} total records[/bold] in [yellow]{total_load_time:.1f}s[/yellow][/green]")
-    
+    total_rows = sum(d["rows"] for d in loaded_datasets)
+    total_load_time = sum(d["load_time"] for d in loaded_datasets)
+    console.print(
+        f"\n✓ [green]Successfully loaded {len(loaded_datasets)} datasets: [bold]{total_rows:,} total records[/bold] in [yellow]{total_load_time:.1f}s[/yellow][/green]"
+    )
+
     # Perform analytical queries on larger datasets
-    console.print("\n[bold blue]Running analytical queries on larger datasets...[/bold blue]")
-    
+    console.print(
+        "\n[bold blue]Running analytical queries on larger datasets...[/bold blue]"
+    )
+
     large_queries = []
-    
+
     # Add queries based on what datasets loaded successfully
     for dataset in loaded_datasets:
-        table_name = dataset['table']
-        
+        table_name = dataset["table"]
+
         # Handle external datasets (with quoted column names)
-        if dataset.get('source') == 'external':
-            if table_name == 'customers_large':
-                large_queries.extend([
-                    ("External Customers by Country", f'SELECT "Country", COUNT(*) as count FROM {table_name} GROUP BY "Country" ORDER BY count DESC LIMIT 10'),
-                    ("External Customer Cities", f'SELECT "City", COUNT(*) as count FROM {table_name} GROUP BY "City" ORDER BY count DESC LIMIT 10'),
-                    # Skip schema analysis for customers to reduce redundancy
-                ])
-            elif table_name == 'people_large':
-                large_queries.extend([
-                    ("People by Gender", f'SELECT "Sex", COUNT(*) as count FROM {table_name} GROUP BY "Sex"'),
-                    ("Top Job Titles", f'SELECT "Job Title", COUNT(*) as count FROM {table_name} GROUP BY "Job Title" ORDER BY count DESC LIMIT 10'),
-                    # Skip schema analysis for people to reduce redundancy
-                ])
-            elif table_name == 'organizations_large':
-                large_queries.extend([
-                    ("Organizations by Country", f'SELECT "Country", COUNT(*) as count FROM {table_name} GROUP BY "Country" ORDER BY count DESC LIMIT 10'),
-                    ("Top Industries", f'SELECT "Industry", COUNT(*) as count FROM {table_name} GROUP BY "Industry" ORDER BY count DESC LIMIT 10'),
-                    # Only keep one schema analysis example
-                    ("Schema Analysis", f"DESCRIBE {table_name}")
-                ])
-        
+        if dataset.get("source") == "external":
+            if table_name == "customers_large":
+                large_queries.extend(
+                    [
+                        (
+                            "External Customers by Country",
+                            f'SELECT "Country", COUNT(*) as count FROM {table_name} GROUP BY "Country" ORDER BY count DESC LIMIT 10',
+                        ),
+                        (
+                            "External Customer Cities",
+                            f'SELECT "City", COUNT(*) as count FROM {table_name} GROUP BY "City" ORDER BY count DESC LIMIT 10',
+                        ),
+                        # Skip schema analysis for customers to reduce redundancy
+                    ]
+                )
+            elif table_name == "people_large":
+                large_queries.extend(
+                    [
+                        (
+                            "People by Gender",
+                            f'SELECT "Sex", COUNT(*) as count FROM {table_name} GROUP BY "Sex"',
+                        ),
+                        (
+                            "Top Job Titles",
+                            f'SELECT "Job Title", COUNT(*) as count FROM {table_name} GROUP BY "Job Title" ORDER BY count DESC LIMIT 10',
+                        ),
+                        # Skip schema analysis for people to reduce redundancy
+                    ]
+                )
+            elif table_name == "organizations_large":
+                large_queries.extend(
+                    [
+                        (
+                            "Organizations by Country",
+                            f'SELECT "Country", COUNT(*) as count FROM {table_name} GROUP BY "Country" ORDER BY count DESC LIMIT 10',
+                        ),
+                        (
+                            "Top Industries",
+                            f'SELECT "Industry", COUNT(*) as count FROM {table_name} GROUP BY "Industry" ORDER BY count DESC LIMIT 10',
+                        ),
+                        # Only keep one schema analysis example
+                        ("Schema Analysis", f"DESCRIBE {table_name}"),
+                    ]
+                )
+
         # Handle synthetic datasets (no quoted column names needed)
-        elif dataset.get('source') == 'synthetic':
-            if table_name == 'customers_synthetic':
-                large_queries.extend([
-                    ("Customer Age Distribution", f"SELECT age, COUNT(*) as count FROM {table_name} GROUP BY age ORDER BY age LIMIT 10"),
-                    ("Customer Tier Analysis", f"SELECT tier, COUNT(*) as count FROM {table_name} GROUP BY tier ORDER BY count DESC"),
-                    ("Customer City Distribution", f"SELECT city, COUNT(*) as count FROM {table_name} GROUP BY city ORDER BY count DESC LIMIT 10"),
-                    ("Schema Analysis", f"DESCRIBE {table_name}")
-                ])
-            elif table_name == 'orders_synthetic':
-                large_queries.extend([
-                    ("Orders by Status", f"SELECT status, COUNT(*) as count FROM {table_name} GROUP BY status ORDER BY count DESC"),
-                    ("Orders by Region", f"SELECT region, COUNT(*) as count FROM {table_name} GROUP BY region ORDER BY count DESC"),
-                    ("Top Products by Orders", f"SELECT product_name, COUNT(*) as count FROM {table_name} GROUP BY product_name ORDER BY count DESC LIMIT 10"),
-                    ("Average Order Value", f"SELECT AVG(amount) as avg_order_value, MIN(amount) as min_order, MAX(amount) as max_order FROM {table_name}"),
-                    ("Schema Analysis", f"DESCRIBE {table_name}")
-                ])
-            elif table_name == 'products_synthetic':
-                large_queries.extend([
-                    ("Products by Category", f"SELECT category, COUNT(*) as count FROM {table_name} GROUP BY category ORDER BY count DESC"),
-                    ("Average Price by Category", f"SELECT category, AVG(price) as avg_price FROM {table_name} GROUP BY category ORDER BY avg_price DESC"),
-                    ("Top Brands", f"SELECT brand, COUNT(*) as count FROM {table_name} GROUP BY brand ORDER BY count DESC LIMIT 10"),
-                    ("Schema Analysis", f"DESCRIBE {table_name}")
-                ])
-    
+        elif dataset.get("source") == "synthetic":
+            if table_name == "customers_synthetic":
+                large_queries.extend(
+                    [
+                        (
+                            "Customer Age Distribution",
+                            f"SELECT age, COUNT(*) as count FROM {table_name} GROUP BY age ORDER BY age LIMIT 10",
+                        ),
+                        (
+                            "Customer Tier Analysis",
+                            f"SELECT tier, COUNT(*) as count FROM {table_name} GROUP BY tier ORDER BY count DESC",
+                        ),
+                        (
+                            "Customer City Distribution",
+                            f"SELECT city, COUNT(*) as count FROM {table_name} GROUP BY city ORDER BY count DESC LIMIT 10",
+                        ),
+                        ("Schema Analysis", f"DESCRIBE {table_name}"),
+                    ]
+                )
+            elif table_name == "orders_synthetic":
+                large_queries.extend(
+                    [
+                        (
+                            "Orders by Status",
+                            f"SELECT status, COUNT(*) as count FROM {table_name} GROUP BY status ORDER BY count DESC",
+                        ),
+                        (
+                            "Orders by Region",
+                            f"SELECT region, COUNT(*) as count FROM {table_name} GROUP BY region ORDER BY count DESC",
+                        ),
+                        (
+                            "Top Products by Orders",
+                            f"SELECT product_name, COUNT(*) as count FROM {table_name} GROUP BY product_name ORDER BY count DESC LIMIT 10",
+                        ),
+                        (
+                            "Average Order Value",
+                            f"SELECT AVG(amount) as avg_order_value, MIN(amount) as min_order, MAX(amount) as max_order FROM {table_name}",
+                        ),
+                        ("Schema Analysis", f"DESCRIBE {table_name}"),
+                    ]
+                )
+            elif table_name == "products_synthetic":
+                large_queries.extend(
+                    [
+                        (
+                            "Products by Category",
+                            f"SELECT category, COUNT(*) as count FROM {table_name} GROUP BY category ORDER BY count DESC",
+                        ),
+                        (
+                            "Average Price by Category",
+                            f"SELECT category, AVG(price) as avg_price FROM {table_name} GROUP BY category ORDER BY avg_price DESC",
+                        ),
+                        (
+                            "Top Brands",
+                            f"SELECT brand, COUNT(*) as count FROM {table_name} GROUP BY brand ORDER BY count DESC LIMIT 10",
+                        ),
+                        ("Schema Analysis", f"DESCRIBE {table_name}"),
+                    ]
+                )
+
     # Cross-dataset analytical queries if multiple datasets loaded
     if len(loaded_datasets) >= 2:
-        table_names = [d['table'] for d in loaded_datasets]
-        
+        table_names = [d["table"] for d in loaded_datasets]
+
         # Cross-dataset queries for external data
-        if 'customers_large' in table_names and 'organizations_large' in table_names:
-            large_queries.append((
-                "Customer vs Organization Countries",
-                f"""SELECT 
+        if "customers_large" in table_names and "organizations_large" in table_names:
+            large_queries.append(
+                (
+                    "Customer vs Organization Countries",
+                    """SELECT 
                     COALESCE(c."Country", o."Country") as country,
                     COUNT(DISTINCT c."Customer Id") as customers,
                     COUNT(DISTINCT o."Organization Id") as organizations
@@ -1201,24 +1295,28 @@ def demonstrate_large_dataset(conn: duckdb.DuckDBPyConnection) -> bool:
                 FULL OUTER JOIN organizations_large o ON c."Country" = o."Country"
                 GROUP BY COALESCE(c."Country", o."Country")
                 ORDER BY customers DESC, organizations DESC
-                LIMIT 10"""
-            ))
-        
-        if len([d for d in loaded_datasets if d.get('source') == 'external']) >= 2:
-            large_queries.append((
-                "Total Records by Dataset",
-                f"""SELECT 'Customers' as dataset, COUNT(*) as records FROM customers_large
+                LIMIT 10""",
+                )
+            )
+
+        if len([d for d in loaded_datasets if d.get("source") == "external"]) >= 2:
+            large_queries.append(
+                (
+                    "Total Records by Dataset",
+                    """SELECT 'Customers' as dataset, COUNT(*) as records FROM customers_large
                 UNION ALL
                 SELECT 'People' as dataset, COUNT(*) as records FROM people_large
                 UNION ALL  
-                SELECT 'Organizations' as dataset, COUNT(*) as records FROM organizations_large"""
-            ))
-        
+                SELECT 'Organizations' as dataset, COUNT(*) as records FROM organizations_large""",
+                )
+            )
+
         # Cross-dataset queries for synthetic data
-        if 'customers_synthetic' in table_names and 'orders_synthetic' in table_names:
-            large_queries.append((
-                "Customer-Order Analysis",
-                f"""SELECT 
+        if "customers_synthetic" in table_names and "orders_synthetic" in table_names:
+            large_queries.append(
+                (
+                    "Customer-Order Analysis",
+                    """SELECT 
                     c.tier,
                     COUNT(DISTINCT c.customer_id) as customers,
                     COUNT(o.order_id) as total_orders,
@@ -1226,13 +1324,15 @@ def demonstrate_large_dataset(conn: duckdb.DuckDBPyConnection) -> bool:
                 FROM customers_synthetic c
                 LEFT JOIN orders_synthetic o ON c.customer_id = o.customer_id
                 GROUP BY c.tier
-                ORDER BY avg_order_value DESC"""
-            ))
-        
-        if 'orders_synthetic' in table_names and 'products_synthetic' in table_names:
-            large_queries.append((
-                "Product Performance",
-                f"""SELECT 
+                ORDER BY avg_order_value DESC""",
+                )
+            )
+
+        if "orders_synthetic" in table_names and "products_synthetic" in table_names:
+            large_queries.append(
+                (
+                    "Product Performance",
+                    """SELECT 
                     p.category,
                     COUNT(o.order_id) as order_count,
                     AVG(o.amount) as avg_order_amount,
@@ -1241,13 +1341,14 @@ def demonstrate_large_dataset(conn: duckdb.DuckDBPyConnection) -> bool:
                 LEFT JOIN orders_synthetic o ON p.name = o.product_name
                 GROUP BY p.category
                 ORDER BY order_count DESC
-                LIMIT 10"""
-            ))
-        
+                LIMIT 10""",
+                )
+            )
+
         # Skip the duplicate dataset summary since we already have "Total Records by Dataset"
-    
+
     # Skip generic queries to avoid duplication with other summaries
-    
+
     query_results = []
     with Progress(
         SpinnerColumn(),
@@ -1257,109 +1358,132 @@ def demonstrate_large_dataset(conn: duckdb.DuckDBPyConnection) -> bool:
         console=console,
     ) as progress:
         task = progress.add_task("Executing queries...", total=len(large_queries))
-        
+
         for query_name, query in large_queries:
             progress.update(task, description=f"Running: {query_name}")
             try:
                 start_time = time.time()
                 result = conn.execute(query).fetchdf()
                 exec_time = time.time() - start_time
-                
-                query_results.append({
-                    "query": query_name,
-                    "time_ms": round(exec_time * 1000, 2),
-                    "rows": len(result),
-                    "result": result
-                })
-                
+
+                query_results.append(
+                    {
+                        "query": query_name,
+                        "time_ms": round(exec_time * 1000, 2),
+                        "rows": len(result),
+                        "result": result,
+                    }
+                )
+
                 # Log to file but don't print to console to reduce verbosity
-                logger.info(f"Query {query_name}: {exec_time*1000:.2f}ms ({len(result)} rows)")
-                
+                logger.info(
+                    f"Query {query_name}: {exec_time * 1000:.2f}ms ({len(result)} rows)"
+                )
+
             except Exception as e:
                 console.print(f"   [red]{query_name} failed:[/red] {e}")
                 logger.warning(f"Query {query_name} failed: {e}")
-            
+
             progress.advance(task)
-    
+
     # Show actual query results instead of just performance metrics
     if query_results:
         console.print("\n[bold blue]Query Results and Performance:[/bold blue]")
-        
+
         for result in query_results:
-            query_name = result['query']
-            exec_time = result['time_ms']
-            result_df = result['result']
-            
+            query_name = result["query"]
+            exec_time = result["time_ms"]
+            result_df = result["result"]
+
             # Create a table for each meaningful query result
-            if not result_df.empty and result['rows'] > 1:
-                result_table = Table(title=f" {query_name} ({exec_time}ms)", box=box.ROUNDED)
-                
+            if not result_df.empty and result["rows"] > 1:
+                result_table = Table(
+                    title=f" {query_name} ({exec_time}ms)", box=box.ROUNDED
+                )
+
                 # Add columns from the result
                 for col in result_df.columns:
                     result_table.add_column(col, style="cyan")
-                
+
                 # Add rows (limit to first 5 to keep it concise)
                 for _, row in result_df.head(5).iterrows():
                     result_table.add_row(*[str(val) for val in row])
-                
+
                 console.print("\n")
                 console.print(result_table)
-            
-            elif result['rows'] == 1 and 'Schema Analysis' not in query_name:
+
+            elif result["rows"] == 1 and "Schema Analysis" not in query_name:
                 # For single-value results, show inline
                 if not result_df.empty:
                     first_row = result_df.iloc[0]
-                    values = " | ".join([f"{col}: {val}" for col, val in first_row.items()])
-                    console.print(f"   [cyan]{query_name}[/cyan] ({exec_time}ms): [green]{values}[/green]")
-    
+                    values = " | ".join(
+                        [f"{col}: {val}" for col, val in first_row.items()]
+                    )
+                    console.print(
+                        f"   [cyan]{query_name}[/cyan] ({exec_time}ms): [green]{values}[/green]"
+                    )
+
     # Show brief sample data info instead of full table
     if loaded_datasets:
-        sample_table_name = loaded_datasets[0]['table'] 
+        sample_table_name = loaded_datasets[0]["table"]
         try:
-            sample_data = conn.execute(f"SELECT * FROM {sample_table_name} LIMIT 1").fetchdf()
+            sample_data = conn.execute(
+                f"SELECT * FROM {sample_table_name} LIMIT 1"
+            ).fetchdf()
             if not sample_data.empty:
                 col_count = len(sample_data.columns)
-                console.print(f"✓ [cyan]Sample data verified: {col_count} columns available for analysis[/cyan]")
+                console.print(
+                    f"✓ [cyan]Sample data verified: {col_count} columns available for analysis[/cyan]"
+                )
         except Exception as e:
             logger.warning(f"Could not verify sample data: {e}")
-    
+
     # Storage analysis for large datasets
-    console.print("\n[bold blue]Analyzing storage efficiency with larger datasets...[/bold blue]")
-    
+    console.print(
+        "\n[bold blue]Analyzing storage efficiency with larger datasets...[/bold blue]"
+    )
+
     try:
         # Calculate total storage
         lake_data_dir = "./ducklake_data"
         if os.path.exists(lake_data_dir):
             total_size = 0
             file_count = 0
-            
+
             for root, dirs, files in os.walk(lake_data_dir):
                 for file in files:
                     file_path = os.path.join(root, file)
                     total_size += os.path.getsize(file_path)
                     file_count += 1
-            
+
             # Calculate total rows across all tables
-            total_rows = sum(dataset['rows'] for dataset in loaded_datasets)
+            total_rows = sum(dataset["rows"] for dataset in loaded_datasets)
             total_rows += 600  # Add original demo data
-            
+
             # Storage efficiency metrics
-            storage_table = Table(title=" Large Dataset Storage Metrics", box=box.ROUNDED)
+            storage_table = Table(
+                title=" Large Dataset Storage Metrics", box=box.ROUNDED
+            )
             storage_table.add_column("Metric", style="cyan")
             storage_table.add_column("Value", style="green")
-            
+
             storage_table.add_row("Total Records", f"{total_rows:,}")
-            storage_table.add_row("Storage Size", f"{total_size / (1024*1024):.2f} MB")
+            storage_table.add_row(
+                "Storage Size", f"{total_size / (1024 * 1024):.2f} MB"
+            )
             storage_table.add_row("Files Created", str(file_count))
-            storage_table.add_row("Avg Bytes/Record", f"{total_size / total_rows:.2f}" if total_rows > 0 else "N/A")
+            storage_table.add_row(
+                "Avg Bytes/Record",
+                f"{total_size / total_rows:.2f}" if total_rows > 0 else "N/A",
+            )
             storage_table.add_row("Compression Ratio", "~5-10x vs CSV")
-            
+
             console.print("\n")
             console.print(storage_table)
-    
+
     except Exception as e:
         console.print(f" [yellow]Storage analysis unavailable: {e}[/yellow]")
-    
+
     console.print("✓ [green]Large dataset experimentation completed[/green]")
     logger.info("Large dataset demonstration completed successfully")
     return True
@@ -1373,16 +1497,20 @@ def show_maintenance_info(conn: duckdb.DuckDBPyConnection) -> bool:
         try:
             # Get table statistics for all tables
             all_tables = conn.execute("SHOW TABLES").fetchdf()
-            
+
             if all_tables.empty:
                 console.print(" [yellow]No tables found[/yellow]")
                 return True
-            
+
             table_stats_queries = []
             for _, table_row in all_tables.iterrows():
-                table_name = table_row['name'] if 'name' in table_row else str(table_row[0])
-                table_stats_queries.append(f"SELECT '{table_name}' as table_name, COUNT(*) as row_count, 'DuckLake table' as type FROM \"{table_name}\"")
-            
+                table_name = (
+                    table_row["name"] if "name" in table_row else str(table_row[0])
+                )
+                table_stats_queries.append(
+                    f"SELECT '{table_name}' as table_name, COUNT(*) as row_count, 'DuckLake table' as type FROM \"{table_name}\""
+                )
+
             if table_stats_queries:
                 union_query = " UNION ALL ".join(table_stats_queries)
                 table_stats = conn.execute(union_query).fetchdf()
@@ -1412,7 +1540,9 @@ def show_maintenance_info(conn: duckdb.DuckDBPyConnection) -> bool:
 
                 for _, row in table_stats.iterrows():
                     stats_table.add_row(
-                        str(row["table_name"]), f"{row['row_count']:,}", str(row["type"])
+                        str(row["table_name"]),
+                        f"{row['row_count']:,}",
+                        str(row["type"]),
                     )
 
                 console.print("\n")
@@ -1504,6 +1634,1251 @@ def reset_ducklake_data() -> bool:
             return False
 
 
+def demonstrate_production_concepts(
+    conn: duckdb.DuckDBPyConnection, db_name: str
+) -> bool:
+    """Demonstrate production deployment concepts and best practices."""
+    console.print("\n[bold blue]Production Deployment Concepts...[/bold blue]")
+
+    try:
+        # Multi-user scenarios with detailed explanations
+        console.print("\n[bold cyan]Multi-User Access Patterns[/bold cyan]")
+
+        multiuser_md = """
+**Understanding Concurrent Access**
+
+When multiple users or applications access the same data simultaneously, you need to ensure:
+- Data consistency (no corruption)
+- Performance (users don't wait unnecessarily)
+- Isolation (one user's work doesn't break another's)
+
+**How DuckLake Handles Concurrency**
+
+**Multiple Readers**
+- Unlimited concurrent read queries are supported
+- Each reader gets a consistent snapshot of data
+- Readers never block other readers or writers
+- Perfect for dashboards and reporting tools
+
+**Writer Isolation** 
+- Only one writer can modify data at a time
+- ACID transactions ensure all-or-nothing changes
+- If two users try to write simultaneously, one waits
+- No risk of partial updates or data corruption
+
+**Snapshot Isolation**
+- Each query sees data as of a specific point in time
+- Long-running queries aren't affected by new writes
+- Enables consistent reporting even during data updates
+
+**Connection Pooling**
+- Instead of opening a new database connection for each request
+- Maintain a pool of reusable connections
+- Reduces overhead and improves performance
+- Essential for web applications with many users
+
+**Example: Web Application Pattern**
+```python
+# Connection pool for web app
+from sqlalchemy import create_engine
+from sqlalchemy.pool import QueuePool
+
+engine = create_engine(
+    'duckdb:///ducklake.db',
+    poolclass=QueuePool,
+    pool_size=10,        # 10 connections in pool
+    max_overflow=20      # Up to 20 additional connections
+)
+```
+        """
+
+        console.print(Markdown(multiuser_md))
+
+        # Partitioning strategies with detailed explanations
+        console.print("\n[bold yellow]Data Partitioning for Performance[/bold yellow]")
+
+        partitioning_md = """
+**What is Partitioning?**
+
+Partitioning splits large tables into smaller, more manageable pieces called partitions. Think of it like organizing files into folders - instead of one giant folder with millions of files, you create subfolders by year, department, etc.
+
+**Why Partition Data?**
+
+**Query Performance**
+- Skip irrelevant partitions (called "partition pruning")
+- Only scan data that matches your query filters
+- Example: Query for 2024 data only scans 2024 partition, not all years
+
+**Parallel Processing**
+- Different partitions can be processed simultaneously
+- Utilize multiple CPU cores effectively
+- Faster aggregations and analytics
+
+**Data Management**
+- Delete old data by dropping entire partitions
+- Backup/restore specific time periods
+- Apply different retention policies per partition
+
+**Partitioning Strategies**
+
+**Date-Based Partitioning** (Most Common)
+```sql
+-- Partition sales by year and month
+CREATE TABLE sales_partitioned (
+    sale_date DATE,
+    customer_id INTEGER,
+    amount DECIMAL
+) PARTITIONED BY (year(sale_date), month(sale_date));
+```
+- Perfect for time-series data
+- Enables efficient historical queries
+- Easy to archive old data
+
+**Geographic Partitioning**
+```sql
+-- Partition by region for global datasets
+CREATE TABLE customers_partitioned (
+    customer_id INTEGER,
+    region VARCHAR,
+    country VARCHAR
+) PARTITIONED BY (region);
+```
+- Useful for multi-regional applications
+- Compliance with data residency requirements
+- Regional performance optimization
+
+**Category-Based Partitioning**
+```sql
+-- Partition by product category
+CREATE TABLE products_partitioned (
+    product_id INTEGER,
+    category VARCHAR,
+    price DECIMAL
+) PARTITIONED BY (category);
+```
+- Organize by business dimensions
+- Department-specific data access
+- Workload isolation
+
+**Hash Partitioning**
+```sql
+-- Distribute data evenly across partitions
+CREATE TABLE events_partitioned (
+    event_id INTEGER,
+    user_id INTEGER,
+    event_data JSON
+) PARTITIONED BY (hash(user_id) % 10);
+```
+- Even distribution when no natural partition key exists
+- Load balancing across partitions
+- Good for parallel processing
+
+**Choosing the Right Strategy**
+
+Ask yourself:
+- How do users typically filter data? (by date, region, category?)
+- What's your most common query pattern?
+- Do you need to archive old data regularly?
+- Are there compliance requirements for data location?
+        """
+
+        console.print(Markdown(partitioning_md))
+
+        # Table maintenance with detailed explanations
+        console.print("\n[bold green]Table Maintenance and Optimization[/bold green]")
+
+        maintenance_md = """
+**Why Table Maintenance Matters**
+
+Over time, data lakes accumulate "cruft" - deleted records, small files, outdated statistics. Without maintenance, performance degrades and storage costs increase.
+
+**Core Maintenance Operations**
+
+**VACUUM - Space Reclamation**
+```sql
+VACUUM customers;
+```
+- Removes physically deleted records from files
+- Reclaims disk space back to the operating system
+- Consolidates fragmented data files
+- When to use: After large DELETE operations
+
+**OPTIMIZE - File Compaction**
+```sql
+OPTIMIZE sales;
+```
+- Combines many small files into fewer large files
+- Improves query performance (fewer files to open)
+- Reduces metadata overhead
+- When to use: After many small INSERT operations
+
+**ANALYZE - Statistics Update**
+```sql
+ANALYZE TABLE products;
+```
+- Updates table and column statistics for query optimizer
+- Helps database choose efficient query execution plans
+- Critical for good performance on large tables
+- When to use: After significant data changes
+
+**CHECKPOINT - Recovery Points**
+```sql
+CHECKPOINT;
+```
+- Creates recovery savepoints
+- Ensures all changes are written to disk
+- Enables faster recovery after crashes
+- When to use: Before major operations or during maintenance windows
+
+**Maintenance Scheduling**
+
+**Daily Tasks**
+- ANALYZE tables with frequent INSERT/UPDATE/DELETE operations
+- Monitor query performance metrics
+- Check for failed operations in logs
+
+**Weekly Tasks**  
+- VACUUM tables with high DELETE volume
+- Review slow query logs
+- Check storage growth trends
+
+**Monthly Tasks**
+- OPTIMIZE large tables with many small files
+- Review and update partitioning strategies
+- Performance baseline analysis
+
+**Quarterly Tasks**
+- Review overall data lake architecture
+- Evaluate partitioning effectiveness
+- Capacity planning and cost optimization
+
+**Monitoring What Matters**
+
+**Storage Metrics**
+- Table sizes and growth rates over time
+- Number of files per table (watch for file explosion)
+- Storage utilization and costs
+
+**Performance Metrics**
+- Query execution times (watch for degradation)
+- Concurrent connection counts
+- Cache hit ratios
+
+**Operational Metrics**
+- Error rates and timeout frequency
+- Maintenance operation success rates
+- Data freshness and staleness
+
+**Example Monitoring Query**
+```sql
+-- Check table file counts (high numbers indicate need for OPTIMIZE)
+SELECT 
+    table_name,
+    COUNT(*) as file_count,
+    SUM(file_size_bytes) / (1024*1024) as size_mb
+FROM table_files_metadata 
+GROUP BY table_name
+ORDER BY file_count DESC;
+```
+        """
+
+        console.print(Markdown(maintenance_md))
+
+        # Practical maintenance demonstration
+        console.print(
+            "\n[bold green]Hands-On: Table Maintenance Operations[/bold green]"
+        )
+
+        console.print("\nLet's see how to perform actual maintenance on DuckLake:")
+
+        # Maintenance operations code
+        maintenance_demo_code = '''import duckdb
+
+conn = duckdb.connect('ducklake.duckdb')
+
+# Check table information before maintenance
+table_info = conn.execute("""
+    SELECT 
+        table_name,
+        estimated_size,
+        row_count
+    FROM information_schema.tables 
+    WHERE table_schema != 'information_schema'
+""").fetchdf()
+
+print("Tables before maintenance:")
+print(table_info)
+
+# VACUUM operation - reclaim space
+print("\\n🧹 Running VACUUM on customers table...")
+conn.execute("VACUUM customers")
+print("✓ VACUUM completed - space reclaimed")
+
+# OPTIMIZE operation - compact files  
+print("\\n📦 Running OPTIMIZE on sales table...")
+conn.execute("OPTIMIZE sales")
+print("✓ OPTIMIZE completed - files compacted")
+
+# ANALYZE operation - update statistics
+print("\\n📊 Running ANALYZE on all tables...")
+conn.execute("ANALYZE")
+print("✓ ANALYZE completed - statistics updated")
+
+# Check file counts (indicates fragmentation)
+file_stats = conn.execute("""
+    SELECT 
+        table_name,
+        COUNT(*) as file_count,
+        SUM(file_size_bytes) / (1024*1024) as total_size_mb
+    FROM (
+        -- This is a conceptual query - actual metadata table may differ
+        SELECT 'customers' as table_name, 1024*1024*5 as file_size_bytes
+        UNION ALL SELECT 'sales', 1024*1024*8
+    ) 
+    GROUP BY table_name
+""").fetchdf()
+
+print("\\nFile statistics after maintenance:")
+print(file_stats)'''
+
+        console.print("\n[bold cyan]Maintenance Operations Demo[/bold cyan]")
+        syntax = Syntax(
+            maintenance_demo_code, "python", theme="monokai", line_numbers=True
+        )
+        console.print(syntax)
+
+        # Monitoring queries demo
+        monitoring_code = '''# Production monitoring queries
+
+# 1. Check table sizes and growth
+size_query = """
+SELECT 
+    table_name,
+    pg_size_pretty(pg_total_relation_size(table_name)) as table_size,
+    pg_size_pretty(pg_relation_size(table_name)) as data_size
+FROM information_schema.tables 
+WHERE table_schema = 'public'
+ORDER BY pg_total_relation_size(table_name) DESC
+"""
+
+table_sizes = conn.execute(size_query).fetchdf()
+print("Table sizes:")
+print(table_sizes)
+
+# 2. Check query performance over time
+performance_query = """
+SELECT 
+    DATE(query_time) as date,
+    COUNT(*) as query_count,
+    AVG(execution_time_ms) as avg_time_ms,
+    MAX(execution_time_ms) as max_time_ms
+FROM query_log 
+WHERE query_time >= CURRENT_DATE - INTERVAL '7 days'
+GROUP BY DATE(query_time)
+ORDER BY date
+"""
+
+# 3. Check concurrent connections
+connection_query = """
+SELECT 
+    COUNT(*) as active_connections,
+    COUNT(CASE WHEN state = 'active' THEN 1 END) as running_queries,
+    COUNT(CASE WHEN state = 'idle' THEN 1 END) as idle_connections
+FROM pg_stat_activity 
+WHERE datname = 'ducklake_catalog'
+"""
+
+connections = conn.execute(connection_query).fetchdf()
+print("\\nConnection status:")
+print(connections)'''
+
+        console.print("\n[bold cyan]Production Monitoring Queries[/bold cyan]")
+        syntax = Syntax(monitoring_code, "python", theme="monokai", line_numbers=True)
+        console.print(syntax)
+
+        # Test concurrent access simulation
+        console.print(
+            "\n[bold blue]Simulating concurrent access patterns...[/bold blue]"
+        )
+
+        # Create a simple test of concurrent read capability
+        try:
+            # Simulate multiple concurrent queries
+            import threading
+            import time
+
+            query_times = []
+
+            def run_query():
+                start = time.time()
+                conn.execute("SELECT COUNT(*) FROM customers").fetchone()
+                end = time.time()
+                query_times.append(end - start)
+
+            # Run 3 concurrent queries
+            threads = []
+            for i in range(3):
+                t = threading.Thread(target=run_query)
+                threads.append(t)
+                t.start()
+
+            for t in threads:
+                t.join()
+
+            avg_time = sum(query_times) / len(query_times) * 1000
+            console.print(
+                f"✓ [green]Concurrent access test: 3 parallel queries, avg {avg_time:.2f}ms[/green]"
+            )
+
+        except Exception as e:
+            console.print(f"[yellow]Concurrent access simulation skipped: {e}[/yellow]")
+
+        return True
+    except Exception as e:
+        console.print(f" [red]Production concepts demonstration failed:[/red] {e}")
+        logger.error(f"Production concepts failed: {e}")
+        return False
+
+
+def demonstrate_integration_patterns(conn: duckdb.DuckDBPyConnection) -> bool:
+    """Demonstrate integration patterns with BI tools, APIs, and ETL systems."""
+    console.print("\n[bold blue]Integration Patterns and Examples...[/bold blue]")
+
+    try:
+        # ETL/ELT patterns with detailed explanations
+        console.print("\n[bold blue]ETL vs ELT Data Processing[/bold blue]")
+
+        etl_md = """
+**Understanding Data Processing Approaches**
+
+**Traditional ETL (Extract-Transform-Load)**
+
+The "old school" approach where you clean and structure data before storing it:
+
+1. **Extract**: Pull data from source systems (databases, APIs, files)
+2. **Transform**: Clean, validate, and structure the data
+3. **Load**: Store the clean data in the target system
+
+```python
+# ETL Example with DuckLake
+import pandas as pd
+
+# Extract from source
+raw_data = pd.read_csv('messy_sales_data.csv')
+
+# Transform (clean and validate)
+clean_data = raw_data.dropna()
+clean_data['sale_date'] = pd.to_datetime(clean_data['sale_date'])
+clean_data['amount'] = clean_data['amount'].round(2)
+
+# Load into DuckLake
+conn.execute("CREATE TABLE clean_sales AS SELECT * FROM clean_data")
+```
+
+**When to use ETL:**
+- Strict data quality requirements
+- Compliance and regulatory needs
+- Limited storage space
+- Well-defined, stable data sources
+
+**Modern ELT (Extract-Load-Transform)**
+
+The "data lake" approach where you store raw data first, then transform as needed:
+
+1. **Extract**: Pull data from source systems
+2. **Load**: Store raw data immediately (no transformation)
+3. **Transform**: Clean and structure when querying/analyzing
+
+```sql
+-- ELT Example with DuckLake
+
+-- Load raw data immediately (no transformation)
+CREATE TABLE raw_events AS 
+SELECT * FROM read_json('events/*.json');
+
+-- Transform on-demand with views
+CREATE VIEW clean_events AS
+SELECT 
+    user_id,
+    event_type,
+    timestamp::TIMESTAMP as event_time,
+    json_extract(properties, '$.page_url') as page_url
+FROM raw_events 
+WHERE user_id IS NOT NULL 
+  AND timestamp IS NOT NULL;
+
+-- Create different views for different use cases
+CREATE VIEW marketing_events AS
+SELECT * FROM clean_events 
+WHERE event_type IN ('page_view', 'purchase', 'signup');
+
+CREATE VIEW product_events AS  
+SELECT * FROM clean_events
+WHERE event_type IN ('feature_use', 'error', 'performance');
+```
+
+**When to use ELT:**
+- Exploratory data analysis
+- Rapidly changing requirements
+- Multiple use cases for same data
+- Large volumes of semi-structured data
+
+**DuckLake ELT Best Practices**
+
+**Layered Architecture**
+```sql
+-- Bronze Layer: Raw data (exactly as received)
+CREATE TABLE bronze_web_logs AS
+SELECT * FROM read_csv('logs/*.csv');
+
+-- Silver Layer: Cleaned and validated
+CREATE VIEW silver_web_logs AS
+SELECT 
+    timestamp::TIMESTAMP as log_time,
+    ip_address,
+    CASE 
+        WHEN status_code BETWEEN 200 AND 299 THEN 'success'
+        WHEN status_code BETWEEN 400 AND 499 THEN 'client_error'  
+        WHEN status_code BETWEEN 500 AND 599 THEN 'server_error'
+        ELSE 'other'
+    END as status_category,
+    response_size_bytes
+FROM bronze_web_logs
+WHERE timestamp IS NOT NULL;
+
+-- Gold Layer: Business metrics
+CREATE TABLE gold_daily_web_metrics AS
+SELECT 
+    DATE(log_time) as date,
+    status_category,
+    COUNT(*) as request_count,
+    AVG(response_size_bytes) as avg_response_size
+FROM silver_web_logs
+GROUP BY 1, 2;
+```
+
+**Incremental Processing**
+```sql
+-- Process only new data since last run
+CREATE TABLE processed_events AS
+SELECT * FROM raw_events 
+WHERE timestamp > (
+    SELECT COALESCE(MAX(timestamp), '1900-01-01') 
+    FROM processed_events
+);
+```
+        """
+
+        console.print(Markdown(etl_md))
+
+        # BI tool integration with detailed explanations
+        console.print(
+            "\n[bold magenta]Business Intelligence Tool Integration[/bold magenta]"
+        )
+
+        bi_md = """
+**Connecting BI Tools to DuckLake**
+
+**What are BI Tools?**
+Business Intelligence tools help non-technical users explore and visualize data through drag-and-drop interfaces, charts, and dashboards.
+
+**Popular BI Tools and DuckLake Integration**
+
+**Tableau**
+```
+Connection Type: Native DuckDB Connector
+Connection String: duckdb:///path/to/your/ducklake.duckdb
+```
+- Excellent for complex visualizations
+- Strong geographic mapping capabilities  
+- Good performance with large datasets
+- Supports live connections and extracts
+
+**Microsoft Power BI**
+```
+Connection Type: ODBC Driver
+Data Source: DuckDB ODBC Driver
+Database: /path/to/ducklake.duckdb
+```
+- Integrates well with Microsoft ecosystem
+- Strong Excel integration
+- Good for corporate environments
+- Supports DirectQuery and Import modes
+
+**Grafana**
+```
+Connection Type: PostgreSQL (for catalog)
+Host: localhost:5432
+Database: ducklake_catalog
+```
+- Perfect for operational dashboards
+- Real-time monitoring capabilities
+- Alert system integration
+- Good for time-series data
+
+**Jupyter Notebooks**
+```python
+# Data exploration and analysis
+import duckdb
+import pandas as pd
+import matplotlib.pyplot as plt
+
+conn = duckdb.connect('ducklake.duckdb')
+df = conn.execute(\"\"\"
+    SELECT country, COUNT(*) as customers 
+    FROM customers 
+    GROUP BY country
+\"\"\").df()
+
+df.plot(kind='bar', x='country', y='customers')
+plt.show()
+```
+
+**Performance Optimization for BI Tools**
+
+**Materialized Views**
+Instead of running complex queries every time:
+```sql
+-- Create pre-computed aggregations
+CREATE TABLE customer_monthly_summary AS
+SELECT 
+    DATE_TRUNC('month', order_date) as month,
+    customer_id,
+    COUNT(*) as order_count,
+    SUM(amount) as total_spent,
+    AVG(amount) as avg_order_value
+FROM orders
+GROUP BY 1, 2;
+
+-- BI tools query the summary instead of raw data
+SELECT * FROM customer_monthly_summary 
+WHERE month >= '2024-01-01';
+```
+
+**Connection Pooling**
+For web dashboards with many users:
+```python
+# Don't do this (creates new connection per request)
+def get_sales_data():
+    conn = duckdb.connect('ducklake.duckdb')  # Slow!
+    return conn.execute("SELECT * FROM sales").df()
+
+# Do this instead (reuse connections)
+from sqlalchemy import create_engine
+engine = create_engine('duckdb:///ducklake.duckdb', pool_size=10)
+
+def get_sales_data():
+    return pd.read_sql("SELECT * FROM sales", engine)
+```
+
+**Caching Strategy**
+```python
+# Cache frequently accessed data
+import functools
+from datetime import datetime, timedelta
+
+@functools.lru_cache(maxsize=100)
+def get_daily_metrics(date):
+    return conn.execute(f\"\"\"
+        SELECT * FROM daily_summary 
+        WHERE date = '{date}'
+    \"\"\").df()
+
+# Cache expires after 1 hour
+def get_real_time_metrics():
+    cache_key = datetime.now().strftime('%Y-%m-%d-%H')
+    return get_cached_metrics(cache_key)
+```
+
+**BI Tool Best Practices**
+
+**Design for Self-Service**
+- Create semantic layer with business-friendly column names
+- Add descriptions and documentation to tables/views
+- Establish naming conventions across datasets
+
+**Example Semantic Layer**
+```sql
+CREATE VIEW sales_dashboard AS
+SELECT 
+    o.order_date as "Order Date",
+    c.customer_name as "Customer Name", 
+    c.customer_tier as "Customer Tier",
+    p.product_category as "Product Category",
+    o.quantity as "Quantity Sold",
+    o.unit_price * o.quantity as "Total Revenue",
+    o.unit_price as "Unit Price"
+FROM orders o
+JOIN customers c ON o.customer_id = c.customer_id  
+JOIN products p ON o.product_id = p.product_id;
+```
+
+**Security Considerations**
+- Use read-only database users for BI connections
+- Implement row-level security where needed
+- Monitor query patterns for unusual activity
+- Set query timeouts to prevent runaway queries
+        """
+
+        console.print(Markdown(bi_md))
+
+        # API patterns with detailed explanations
+        console.print("\n[bold orange]API Access Patterns[/bold orange]")
+
+        api_md = """
+**Building APIs on Top of DuckLake**
+
+APIs (Application Programming Interfaces) let other applications and services access your data programmatically. Instead of giving everyone direct database access, you create controlled endpoints.
+
+**REST API with FastAPI**
+
+REST APIs use HTTP methods (GET, POST, PUT, DELETE) to access resources:
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import duckdb
+from typing import List, Optional
+
+app = FastAPI(title="DuckLake Customer API")
+conn = duckdb.connect('ducklake.duckdb')
+
+# Data models for validation
+class Customer(BaseModel):
+    customer_id: int
+    name: str
+    email: str
+    country: str
+    
+class CustomerStats(BaseModel):
+    total_customers: int
+    countries: List[str]
+    avg_age: float
+
+# GET endpoint for customer data
+@app.get("/customers/{country}", response_model=List[Customer])
+def get_customers_by_country(country: str, limit: int = 100):
+    \"\"\"Get customers from a specific country\"\"\"
+    try:
+        result = conn.execute(\"\"\"
+            SELECT customer_id, name, email, country 
+            FROM customers 
+            WHERE country = ? 
+            LIMIT ?
+        \"\"\", [country, limit]).fetchdf()
+        
+        return result.to_dict('records')
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# GET endpoint for statistics
+@app.get("/stats/customers", response_model=CustomerStats)
+def get_customer_stats():
+    \"\"\"Get overall customer statistics\"\"\"
+    stats = conn.execute(\"\"\"
+        SELECT 
+            COUNT(*) as total_customers,
+            COUNT(DISTINCT country) as country_count,
+            AVG(age) as avg_age
+        FROM customers
+    \"\"\").fetchone()
+    
+    countries = conn.execute(\"\"\"
+        SELECT DISTINCT country 
+        FROM customers 
+        ORDER BY country
+    \"\"\").fetchall()
+    
+    return CustomerStats(
+        total_customers=stats[0],
+        countries=[c[0] for c in countries],
+        avg_age=stats[2]
+    )
+
+# POST endpoint for adding customers
+@app.post("/customers", response_model=Customer)
+def create_customer(customer: Customer):
+    \"\"\"Add a new customer\"\"\"
+    conn.execute(\"\"\"
+        INSERT INTO customers (customer_id, name, email, country)
+        VALUES (?, ?, ?, ?)
+    \"\"\", [customer.customer_id, customer.name, customer.email, customer.country])
+    
+    return customer
+```
+
+**GraphQL API (Alternative to REST)**
+
+GraphQL lets clients request exactly the data they need:
+
+```python
+import strawberry
+from typing import List
+
+@strawberry.type
+class Customer:
+    id: int
+    name: str
+    email: str
+    country: str
+    
+    @strawberry.field
+    def orders(self) -> List['Order']:
+        # Fetch orders for this customer
+        orders = conn.execute(\"\"\"
+            SELECT order_id, amount, order_date 
+            FROM orders 
+            WHERE customer_id = ?
+        \"\"\", [self.id]).fetchall()
+        return [Order(id=o[0], amount=o[1], date=o[2]) for o in orders]
+
+@strawberry.type
+class Query:
+    @strawberry.field
+    def customers(self, country: Optional[str] = None) -> List[Customer]:
+        if country:
+            query = "SELECT * FROM customers WHERE country = ?"
+            params = [country]
+        else:
+            query = "SELECT * FROM customers LIMIT 100"
+            params = []
+            
+        results = conn.execute(query, params).fetchall()
+        return [Customer(id=r[0], name=r[1], email=r[2], country=r[3]) for r in results]
+
+schema = strawberry.Schema(query=Query)
+```
+
+**Real-time Data Updates**
+
+**Webhooks for Change Notifications**
+```python
+import requests
+from datetime import datetime
+
+def notify_data_change(table_name: str, change_type: str):
+    \"\"\"Notify downstream systems of data changes\"\"\"
+    payload = {
+        "table": table_name,
+        "change_type": change_type,  # INSERT, UPDATE, DELETE
+        "timestamp": datetime.now().isoformat(),
+        "source": "ducklake-api"
+    }
+    
+    # Send to webhook endpoints
+    webhook_urls = [
+        "https://dashboard.company.com/api/data-refresh",
+        "https://analytics.company.com/api/cache-invalidate"
+    ]
+    
+    for url in webhook_urls:
+        try:
+            requests.post(url, json=payload, timeout=5)
+        except requests.RequestException as e:
+            print(f"Webhook failed for {url}: {e}")
+
+# Use after data changes
+@app.post("/customers")
+def create_customer(customer: Customer):
+    # Insert customer data
+    conn.execute("INSERT INTO customers ...")
+    
+    # Notify downstream systems
+    notify_data_change("customers", "INSERT")
+    
+    return customer
+```
+
+**Message Queues for Reliable Delivery**
+```python
+import pika  # RabbitMQ client
+
+def publish_data_event(table_name: str, event_data: dict):
+    \"\"\"Publish data changes to message queue\"\"\"
+    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+    channel = connection.channel()
+    
+    # Declare queue
+    channel.queue_declare(queue='data_changes', durable=True)
+    
+    # Publish message
+    message = {
+        "table": table_name,
+        "data": event_data,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    channel.basic_publish(
+        exchange='',
+        routing_key='data_changes',
+        body=json.dumps(message),
+        properties=pika.BasicProperties(delivery_mode=2)  # Persistent
+    )
+    
+    connection.close()
+```
+
+**API Security Best Practices**
+
+**Authentication & Authorization**
+```python
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer
+
+security = HTTPBearer()
+
+def verify_token(token: str = Depends(security)):
+    \"\"\"Verify API token\"\"\"
+    if token.credentials != "your-secret-api-key":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token"
+        )
+    return token
+
+@app.get("/customers", dependencies=[Depends(verify_token)])
+def get_customers():
+    # Protected endpoint
+    pass
+```
+
+**Rate Limiting**
+```python
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+@app.get("/customers")
+@limiter.limit("100/minute")  # Max 100 requests per minute
+def get_customers(request: Request):
+    pass
+```
+        """
+
+        console.print(Markdown(api_md))
+
+        # Practical API demonstration
+        console.print("\n[bold green]Hands-On: Building a DuckLake API[/bold green]")
+
+        console.print("\nLet's build a complete API that connects to DuckLake:")
+
+        # Complete API example
+        api_demo_code = '''# Complete FastAPI application with DuckLake
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
+import duckdb
+from typing import List, Optional
+import uvicorn
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="DuckLake Customer API",
+    description="API for accessing customer data in DuckLake",
+    version="1.0.0"
+)
+
+# Database connection
+conn = duckdb.connect('ducklake.duckdb')
+
+# Data models
+class Customer(BaseModel):
+    customer_id: int
+    name: str
+    email: str
+    country: str
+    signup_date: str
+
+class CustomerCreate(BaseModel):
+    name: str
+    email: str  
+    country: str
+
+# API endpoints
+@app.get("/")
+def read_root():
+    return {"message": "DuckLake Customer API", "status": "running"}
+
+@app.get("/customers", response_model=List[Customer])
+def get_customers(
+    country: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0
+):
+    """Get customers with optional filtering"""
+    try:
+        if country:
+            query = """
+                SELECT customer_id, name, email, country, signup_date::STRING
+                FROM customers 
+                WHERE country = ? 
+                ORDER BY signup_date DESC
+                LIMIT ? OFFSET ?
+            """
+            params = [country, limit, offset]
+        else:
+            query = """
+                SELECT customer_id, name, email, country, signup_date::STRING
+                FROM customers
+                ORDER BY signup_date DESC  
+                LIMIT ? OFFSET ?
+            """
+            params = [limit, offset]
+            
+        result = conn.execute(query, params).fetchdf()
+        return result.to_dict('records')
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@app.get("/customers/{customer_id}", response_model=Customer)
+def get_customer(customer_id: int):
+    """Get a specific customer by ID"""
+    try:
+        result = conn.execute("""
+            SELECT customer_id, name, email, country, signup_date::STRING
+            FROM customers 
+            WHERE customer_id = ?
+        """, [customer_id]).fetchdf()
+        
+        if result.empty:
+            raise HTTPException(status_code=404, detail="Customer not found")
+            
+        return result.iloc[0].to_dict()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@app.post("/customers", response_model=Customer)
+def create_customer(customer_data: CustomerCreate):
+    """Create a new customer"""
+    try:
+        # Get next customer ID
+        max_id = conn.execute("SELECT COALESCE(MAX(customer_id), 0) + 1 FROM customers").fetchone()[0]
+        
+        # Insert new customer
+        conn.execute("""
+            INSERT INTO customers (customer_id, name, email, country, signup_date)
+            VALUES (?, ?, ?, ?, CURRENT_DATE)
+        """, [max_id, customer_data.name, customer_data.email, customer_data.country])
+        
+        # Return created customer
+        result = conn.execute("""
+            SELECT customer_id, name, email, country, signup_date::STRING
+            FROM customers 
+            WHERE customer_id = ?
+        """, [max_id]).fetchdf()
+        
+        return result.iloc[0].to_dict()
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@app.get("/stats/customers")
+def get_customer_stats():
+    """Get customer statistics"""
+    try:
+        stats = conn.execute("""
+            SELECT 
+                COUNT(*) as total_customers,
+                COUNT(DISTINCT country) as countries,
+                MIN(signup_date) as first_signup,
+                MAX(signup_date) as last_signup
+            FROM customers
+        """).fetchone()
+        
+        top_countries = conn.execute("""
+            SELECT country, COUNT(*) as count
+            FROM customers
+            GROUP BY country
+            ORDER BY count DESC
+            LIMIT 5
+        """).fetchdf()
+        
+        return {
+            "total_customers": stats[0],
+            "total_countries": stats[1], 
+            "first_signup": str(stats[2]),
+            "last_signup": str(stats[3]),
+            "top_countries": top_countries.to_dict('records')
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+# Run the API server
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+    
+# To test the API:
+# 1. Save this code as 'api.py'
+# 2. Install: pip install fastapi uvicorn
+# 3. Run: python api.py  
+# 4. Visit: http://localhost:8000/docs for interactive API documentation'''
+
+        console.print("\n[bold cyan]Complete DuckLake API Implementation[/bold cyan]")
+        syntax = Syntax(api_demo_code, "python", theme="monokai", line_numbers=True)
+        console.print(syntax)
+
+        # BI Integration example
+        bi_demo_code = '''# Connect Tableau to DuckLake
+# 1. Install DuckDB ODBC driver from: https://duckdb.org/docs/api/odbc
+# 2. In Tableau, choose "Other Databases (ODBC)"
+# 3. Use connection string: 
+#    Driver=DuckDB Driver;Database=/path/to/ducklake.duckdb
+
+# Python/Jupyter integration
+import duckdb
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Connect to DuckLake
+conn = duckdb.connect('ducklake.duckdb')
+
+# Create business intelligence queries
+def create_dashboard_data():
+    # Customer acquisition over time
+    acquisition_data = conn.execute("""
+        SELECT 
+            DATE_TRUNC('month', signup_date) as month,
+            COUNT(*) as new_customers,
+            COUNT(*) OVER (ORDER BY DATE_TRUNC('month', signup_date) 
+                          ROWS UNBOUNDED PRECEDING) as cumulative_customers
+        FROM customers
+        GROUP BY DATE_TRUNC('month', signup_date)
+        ORDER BY month
+    """).fetchdf()
+    
+    # Geographic distribution  
+    geo_data = conn.execute("""
+        SELECT 
+            country,
+            COUNT(*) as customer_count,
+            ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) as percentage
+        FROM customers
+        GROUP BY country
+        ORDER BY customer_count DESC
+    """).fetchdf()
+    
+    return acquisition_data, geo_data
+
+# Generate visualizations
+acquisition_df, geo_df = create_dashboard_data()
+
+# Plot customer acquisition
+plt.figure(figsize=(12, 5))
+
+plt.subplot(1, 2, 1)
+plt.plot(acquisition_df['month'], acquisition_df['cumulative_customers'])
+plt.title('Customer Growth Over Time')
+plt.xlabel('Month')
+plt.ylabel('Total Customers')
+plt.xticks(rotation=45)
+
+plt.subplot(1, 2, 2)
+plt.bar(geo_df['country'][:10], geo_df['customer_count'][:10])
+plt.title('Top 10 Countries by Customer Count')
+plt.xlabel('Country')
+plt.ylabel('Customers')
+plt.xticks(rotation=45)
+
+plt.tight_layout()
+plt.show()
+
+print("✓ BI dashboard data generated and visualized!")'''
+
+        console.print("\n[bold cyan]BI Tool Integration Example[/bold cyan]")
+        syntax = Syntax(bi_demo_code, "python", theme="monokai", line_numbers=True)
+        console.print(syntax)
+
+        # Production deployment
+        deployment_content = """Production Deployment Strategies:
+
+Container Deployment:
+FROM python:3.11
+RUN pip install duckdb ducklake
+COPY . /app
+WORKDIR /app
+CMD ["python", "app.py"]
+
+Infrastructure Considerations:
+• Shared storage: NFS, S3, Azure Blob
+• Catalog database: PostgreSQL cluster
+• Backup strategy: Catalog + data files
+• Monitoring: Prometheus + Grafana
+
+Scaling Patterns:
+• Read replicas: Multiple DuckDB instances
+• Write coordination: Single writer pattern
+• Catalog HA: PostgreSQL replication
+• Data archival: Cold storage policies
+
+Security:
+• Network isolation: VPC, security groups
+• Authentication: Database roles, RBAC
+• Encryption: At-rest and in-transit
+• Audit logging: Query logs, access patterns"""
+
+        deployment_panel = Panel(
+            deployment_content,
+            title=" Production Deployment",
+            style="red",
+            box=box.ROUNDED,
+        )
+        console.print("\n")
+        console.print(deployment_panel)
+
+        # Test a simple API-like query pattern
+        console.print("\n[bold blue]Testing API-like query patterns...[/bold blue]")
+
+        try:
+            # Simulate API endpoint queries
+            api_queries = [
+                (
+                    "Customer Count by Country",
+                    'SELECT COUNT(*) as customer_count FROM customers_large GROUP BY "Country" ORDER BY customer_count DESC LIMIT 3',
+                ),
+                (
+                    "Top Customer Cities",
+                    'SELECT "City", COUNT(*) as customers FROM customers_large GROUP BY "City" ORDER BY customers DESC LIMIT 3',
+                ),
+            ]
+
+            for query_name, query in api_queries:
+                start_time = time.time()
+                result = conn.execute(query).fetchdf()
+                exec_time = time.time() - start_time
+
+                console.print(
+                    f"   [cyan]{query_name}[/cyan]: {exec_time * 1000:.1f}ms, {len(result)} results"
+                )
+
+                # Show sample result
+                if not result.empty:
+                    first_result = result.iloc[0]
+                    sample = " | ".join(
+                        [f"{col}: {val}" for col, val in first_result.items()]
+                    )
+                    console.print(f"      Sample: {sample}")
+
+            console.print(
+                "✓ [green]API query patterns demonstrated successfully[/green]"
+            )
+
+        except Exception as e:
+            console.print(f"[yellow]API pattern testing skipped: {e}[/yellow]")
+
+        return True
+    except Exception as e:
+        console.print(f" [red]Integration patterns demonstration failed:[/red] {e}")
+        logger.error(f"Integration patterns failed: {e}")
+        return False
+
+
 @click.group(invoke_without_command=True)
 @click.option("--no-reset", is_flag=True, help="Keep existing data between runs")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
@@ -1587,6 +2962,194 @@ def run_demo(no_reset: bool = False, verbose: bool = False) -> None:
         if not db_name:
             return
 
+        # Data Lakes 101 Introduction
+        console.print("\n[bold blue]Data Lakes 101: Context and Concepts[/bold blue]")
+        console.print("=" * 50)
+
+        datalake_intro_md = """
+**Data Architecture Overview**
+
+**Traditional Database (OLTP)**
+- Structured data with fixed schemas defined upfront
+- Immediate consistency - changes are visible instantly
+- Optimized for transactions (INSERT, UPDATE, DELETE)
+- Examples: PostgreSQL, MySQL, SQL Server
+
+**Data Warehouse (OLAP)**  
+- Centralized repository for business intelligence
+- ETL process: Extract data, Transform it, then Load
+- Optimized for complex analytical queries
+- Examples: Snowflake, BigQuery, Redshift
+
+**Data Lake**
+- Store raw data in native formats (JSON, CSV, Parquet)
+- Schema-on-read: decide structure when querying, not when storing
+- Can handle structured, semi-structured, and unstructured data
+- Examples: AWS S3 + Athena, Azure Data Lake
+
+**Lakehouse**
+- Combines flexibility of data lakes with performance of warehouses
+- Adds ACID transactions and metadata management to data lakes
+- Best of both worlds: raw data storage + analytical performance
+
+**What is ACID?**
+
+ACID ensures reliable database transactions:
+
+- **Atomicity**: All operations in a transaction succeed or all fail
+- **Consistency**: Database remains in valid state after transactions  
+- **Isolation**: Concurrent transactions don't interfere with each other
+- **Durability**: Committed changes survive system crashes
+
+Example: When transferring money between accounts, both the debit and credit must succeed together, or neither should happen.
+
+**Why Choose DuckLake?**
+
+**ACID Transactions**
+- Unlike basic data lakes, DuckLake guarantees data consistency
+- Safe concurrent access from multiple users/applications
+- No corrupt or partially written data
+
+**Time Travel and Versioning**
+- Every change creates a new snapshot (like Git commits)
+- Query data as it existed at any point in time
+- Enables data auditing and rollback capabilities
+
+**SQL-First Approach**
+- Use familiar SQL instead of learning new query languages
+- Works with existing SQL tools and BI platforms
+- No need to rewrite queries or retrain analysts
+
+**Open Formats**
+- Data stored in standard Parquet files
+- No vendor lock-in - can read files with any Parquet-compatible tool
+- Easy migration to/from other systems
+
+**Local Development**
+- Test and develop locally without cloud dependencies
+- Fast iteration cycles during development
+- Reduced costs during experimentation
+
+**DuckLake vs Alternatives**
+
+| Feature | DuckLake | Delta Lake | Apache Iceberg | Apache Hudi |
+|---------|----------|------------|----------------|-------------|
+| **Catalog** | Any SQL DB | Spark metastore | Various | Hive metastore |
+| **Setup Complexity** | Simple | Medium | Complex | Complex |
+| **Local Development** | Excellent | Limited | Limited | Limited |
+| **SQL Support** | Native | Via Spark | Via engines | Via engines |
+| **Learning Curve** | Low | Medium | High | High |
+        """
+
+        console.print(Markdown(datalake_intro_md))
+
+        # Practical DuckLake connection demonstration
+        console.print("\n[bold green]Hands-On: Connecting to DuckLake[/bold green]")
+
+        console.print("\nLet's see how to connect to DuckLake step by step:")
+
+        # Step 1: Basic Connection
+        connection_code = """import duckdb
+
+# Connect to DuckLake database file
+conn = duckdb.connect('my_ducklake.duckdb')
+
+# Install and load required extensions
+conn.execute("INSTALL ducklake")
+conn.execute("INSTALL postgres")  # For catalog
+conn.execute("LOAD ducklake")
+conn.execute("LOAD postgres")
+
+print("✓ DuckLake connection established!")"""
+
+        console.print("\n[bold cyan]Step 1: Basic DuckLake Connection[/bold cyan]")
+        syntax = Syntax(connection_code, "python", theme="monokai", line_numbers=True)
+        console.print(syntax)
+
+        # Step 2: Catalog Setup
+        catalog_code = '''# Attach PostgreSQL catalog
+catalog_connection = """
+ATTACH 'ducklake:postgres:dbname=ducklake_catalog
+        user=ducklake
+        password=ducklake123
+        host=localhost
+        port=5432' AS my_lake
+        (DATA_PATH './lake_data');
+"""
+
+conn.execute(catalog_connection)
+conn.execute("USE my_lake")
+
+print("✓ DuckLake with PostgreSQL catalog ready!")'''
+
+        console.print("\n[bold cyan]Step 2: Connect to PostgreSQL Catalog[/bold cyan]")
+        syntax = Syntax(catalog_code, "python", theme="monokai", line_numbers=True)
+        console.print(syntax)
+
+        # Step 3: Basic Operations
+        operations_code = '''# Create your first table
+conn.execute("""
+CREATE TABLE customers (
+    id INTEGER,
+    name VARCHAR,
+    email VARCHAR,
+    country VARCHAR,
+    signup_date DATE
+)
+""")
+
+# Insert some data
+conn.execute("""
+INSERT INTO customers VALUES 
+(1, 'John Doe', 'john@example.com', 'USA', '2024-01-15'),
+(2, 'Jane Smith', 'jane@example.com', 'Canada', '2024-01-16'),
+(3, 'Bob Wilson', 'bob@example.com', 'UK', '2024-01-17')
+""")
+
+# Query the data
+result = conn.execute("SELECT * FROM customers").fetchdf()
+print(result)'''
+
+        console.print("\n[bold cyan]Step 3: Create Tables and Insert Data[/bold cyan]")
+        syntax = Syntax(operations_code, "python", theme="monokai", line_numbers=True)
+        console.print(syntax)
+
+        # Step 4: Advanced Features
+        advanced_code = '''# Demonstrate ACID transactions
+conn.begin()
+try:
+    conn.execute("INSERT INTO customers VALUES (4, 'Alice Brown', 'alice@example.com', 'Australia', '2024-01-18')")
+    conn.execute("UPDATE customers SET country = 'US' WHERE country = 'USA'")
+    conn.commit()
+    print("✓ Transaction committed successfully")
+except Exception as e:
+    conn.rollback()
+    print(f"✗ Transaction rolled back: {e}")
+
+# Time travel queries (query previous versions)
+snapshots = conn.execute("SELECT * FROM ducklake_snapshots('my_lake')").fetchdf()
+print(f"Available snapshots: {len(snapshots)}")
+
+# Query historical data
+if len(snapshots) > 1:
+    previous_version = len(snapshots) - 1
+    historical_data = conn.execute(f"""
+        SELECT COUNT(*) as customer_count 
+        FROM customers AT (VERSION => {previous_version})
+    """).fetchone()
+    print(f"Customers in previous version: {historical_data[0]}")'''
+
+        console.print(
+            "\n[bold cyan]Step 4: ACID Transactions and Time Travel[/bold cyan]"
+        )
+        syntax = Syntax(advanced_code, "python", theme="monokai", line_numbers=True)
+        console.print(syntax)
+
+        console.print(
+            "\n[bold yellow]Press Enter to continue to hands-on demonstration...[/bold yellow]"
+        )
+        input()
+
         # Phase 1
         phase1_content = """ This phase demonstrates:
    • Creating tables in DuckLake format
@@ -1626,7 +3189,9 @@ def run_demo(no_reset: bool = False, verbose: bool = False) -> None:
         console.print(summary1_panel)
 
         # Wait for user confirmation before Phase 2
-        console.print("\n[bold yellow]Press Enter to continue to Phase 2 (ACID Transactions & Time Travel)...[/bold yellow]")
+        console.print(
+            "\n[bold yellow]Press Enter to continue to Phase 2 (ACID Transactions & Time Travel)...[/bold yellow]"
+        )
         input()
 
         # Phase 2
@@ -1672,7 +3237,9 @@ def run_demo(no_reset: bool = False, verbose: bool = False) -> None:
         console.print(summary2_panel)
 
         # Wait for user confirmation before Phase 3
-        console.print("\n[bold yellow]Press Enter to continue to Phase 3 (Performance, Storage & File Analysis)...[/bold yellow]")
+        console.print(
+            "\n[bold yellow]Press Enter to continue to Phase 3 (Performance, Storage & File Analysis)...[/bold yellow]"
+        )
         input()
 
         # Phase 3
@@ -1708,7 +3275,9 @@ def run_demo(no_reset: bool = False, verbose: bool = False) -> None:
             return
 
         # Wait for user confirmation before Phase 4
-        console.print("\n[bold yellow]Press Enter to continue to Phase 4 (Large Dataset Experimentation)...[/bold yellow]")
+        console.print(
+            "\n[bold yellow]Press Enter to continue to Phase 4 (Large Dataset Experimentation)...[/bold yellow]"
+        )
         input()
 
         # Phase 4
@@ -1746,15 +3315,103 @@ def run_demo(no_reset: bool = False, verbose: bool = False) -> None:
         console.print("\n")
         console.print(summary4_panel)
 
+        # Wait for user confirmation before Phase 5
+        console.print(
+            "\n[bold yellow]Press Enter to continue to Phase 5 (Production Deployment)...[/bold yellow]"
+        )
+        input()
+
+        # Phase 5
+        phase5_content = """ This phase covers:
+   • Multi-user scenarios and concurrent access
+   • Partitioning strategies for performance
+   • Table maintenance and optimization
+   • Monitoring and observability patterns"""
+
+        phase5_panel = Panel(
+            phase5_content,
+            title=" PHASE 5: Production Deployment",
+            style="bold purple",
+            box=box.ROUNDED,
+        )
+        console.print("\n")
+        console.print(phase5_panel)
+
+        # Demonstrate production concepts
+        if not demonstrate_production_concepts(conn, db_name):
+            console.print(
+                " [yellow]Phase 5 completed with conceptual overview[/yellow]"
+            )
+
+        # Summary of what happened in Phase 5
+        summary5_content = """• Learned about concurrent access patterns and safety
+• Explored partitioning strategies for large datasets
+• Understood table maintenance operations (VACUUM, OPTIMIZE)
+• Reviewed monitoring and observability best practices"""
+
+        summary5_panel = Panel(
+            summary5_content,
+            title=" What just happened",
+            style="green",
+            box=box.ROUNDED,
+        )
+        console.print("\n")
+        console.print(summary5_panel)
+
+        # Wait for user confirmation before Phase 6
+        console.print(
+            "\n[bold yellow]Press Enter to continue to Phase 6 (Integration Examples)...[/bold yellow]"
+        )
+        input()
+
+        # Phase 6
+        phase6_content = """ This phase demonstrates:
+   • ETL/ELT workflow patterns
+   • BI tool integration concepts
+   • API access patterns
+   • Real-world data pipeline examples"""
+
+        phase6_panel = Panel(
+            phase6_content,
+            title=" PHASE 6: Integration Examples",
+            style="bold orange",
+            box=box.ROUNDED,
+        )
+        console.print("\n")
+        console.print(phase6_panel)
+
+        # Demonstrate integration patterns
+        if not demonstrate_integration_patterns(conn):
+            console.print(
+                " [yellow]Phase 6 completed with integration overview[/yellow]"
+            )
+
+        # Summary of what happened in Phase 6
+        summary6_content = """• Explored ETL/ELT workflow patterns with DuckLake
+• Learned about BI tool integration approaches
+• Understood API access and data serving patterns
+• Reviewed real-world production deployment strategies"""
+
+        summary6_panel = Panel(
+            summary6_content,
+            title=" What just happened",
+            style="green",
+            box=box.ROUNDED,
+        )
+        console.print("\n")
+        console.print(summary6_panel)
+
         # Completion summary
-        completion_content = """ Successfully demonstrated DuckLake's key capabilities:
+        completion_content = """ Successfully demonstrated DuckLake's complete ecosystem:
+    Conceptual Foundation: Data lakes, lakehouses, and DuckLake advantages
     Foundation Setup: PostgreSQL catalog with local storage
     Core Operations: Table creation, data ingestion, queries
     ACID Transactions: Consistent data operations with rollback
     Advanced Features: Snapshots, time travel, schema evolution
     Performance: Query optimization and execution analysis
-    Large Scale: 100k+ record datasets and real-world performance
-    Maintenance: Statistics and monitoring operations"""
+    Large Scale: 300k+ record datasets and real-world performance
+    Production Deployment: Multi-user patterns, partitioning, maintenance
+    Integration Patterns: BI tools, APIs, ETL/ELT workflows"""
 
         completion_panel = Panel(
             completion_content,
@@ -1782,12 +3439,12 @@ def run_demo(no_reset: bool = False, verbose: bool = False) -> None:
         console.print(advantages_panel)
 
         # Next steps
-        next_steps_content = """1. Explore additional datasets from https://github.com/datablist/sample-csv-files
-2. Test multi-user scenarios with additional connections
-3. Explore partitioning strategies for large tables
-4. Integrate with existing data pipelines
-5. Set up monitoring and alerting
-6. Experiment with cross-dataset JOIN operations at scale"""
+        next_steps_content = """1. Deploy DuckLake in your production environment
+2. Integrate with your existing BI tools (Tableau, PowerBI)
+3. Build REST/GraphQL APIs for data access
+4. Implement ETL/ELT pipelines for your data sources
+5. Set up monitoring, backup, and maintenance schedules
+6. Explore advanced features: partitioning, optimization, scaling"""
 
         next_steps_panel = Panel(
             next_steps_content, title=" Next Steps", style="cyan", box=box.ROUNDED
