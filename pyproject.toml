@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ducklake-tutorial"
+version = "0.1.0"
+description = "DuckLake tutorial with marimo and PostgreSQL catalog"
+authors = [
+    {name = "Tutorial Author", email = "author@example.com"},
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+
+dependencies = [
+    "marimo[sql]>=0.10.0",
+    "duckdb>=1.3.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "psycopg2-binary>=2.9.0",
+    "taskipy>=1.12.0",
+    "click>=8.0.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.0.0",
+    "ipython>=8.0.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+]
+
+[project.scripts]
+ducklake-demo = "ducklake_demo:cli"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/ducklake-tutorial"
+Repository = "https://github.com/yourusername/ducklake-tutorial"
+Documentation = "https://github.com/yourusername/ducklake-tutorial#readme"
+
+[tool.taskipy.tasks]
+# Start PostgreSQL container
+docker-up = "docker compose up -d"
+
+# Stop PostgreSQL container  
+docker-down = "docker compose down"
+
+# Start marimo notebook
+notebook = "marimo edit ducklake_tutorial.py --host 0.0.0.0 --port 8080 --no-token"
+
+# Complete setup: start docker + marimo
+start = "task docker-up && echo 'Waiting for PostgreSQL...' && sleep 3 && task notebook"
+
+# Development setup with optional dependencies
+dev-install = "uv sync --extra dev"
+
+# Check PostgreSQL status
+docker-status = "docker compose ps"
+
+# View PostgreSQL logs
+docker-logs = "docker compose logs postgres"
+
+# Reset everything (stop containers, remove volumes)
+reset = "docker compose down -v && docker compose up -d"
+
+# Configure UFW firewall for marimo
+setup-firewall = "sudo ufw allow 2718/tcp"
+
+# Reset DuckLake completely (clean slate)
+reset-lake = "rm -rf ./ducklake_data && docker compose exec postgres psql -U ducklake -d ducklake_catalog -c 'DROP SCHEMA IF EXISTS ducklake CASCADE; DROP SCHEMA IF EXISTS main CASCADE; DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'"
+
+# Clean reset: stop containers, remove data, restart fresh
+clean-reset = "docker compose down -v && rm -rf ./ducklake_data && docker compose up -d"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
