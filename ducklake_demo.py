@@ -28,10 +28,10 @@ import subprocess
 import time
 
 import click
-from click import Context
 import duckdb
 import numpy as np
 import pandas as pd
+from click import Context
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -46,10 +46,29 @@ from rich.table import Table
 
 # Initialize rich console and logger
 console = Console()
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+
+# Configure logging to be less intrusive during demo
+class RichHandler(logging.Handler):
+    def emit(self, record):
+        # Only log errors and warnings to console during demo
+        if record.levelno >= logging.WARNING:
+            console.print(f"[yellow]{self.format(record)}[/yellow]")
+
+# Set up logging with custom handler
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Add file handler for all logs
+file_handler = logging.FileHandler('ducklake_demo.log')
+file_handler.setLevel(logging.INFO)
+file_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+file_handler.setFormatter(file_formatter)
+logger.addHandler(file_handler)
+
+# Add rich handler for warnings/errors only
+rich_handler = RichHandler()
+rich_handler.setLevel(logging.WARNING)
+logger.addHandler(rich_handler)
 
 
 def check_postgresql() -> bool:
@@ -70,7 +89,7 @@ def check_postgresql() -> bool:
                 timeout=10,
             )
             if "ducklake-postgres" in result.stdout:
-                console.print("[green]PostgreSQL container is running[/green]")
+                console.print("✓ [green]PostgreSQL container is running[/green]")
                 logger.info("PostgreSQL container found and running")
                 return True
             else:
@@ -94,7 +113,7 @@ def setup_extensions(conn: duckdb.DuckDBPyConnection) -> bool:
             conn.execute("LOAD ducklake")
             conn.execute("LOAD postgres")
             console.print(
-                " [green]DuckLake and PostgreSQL extensions loaded successfully[/green]"
+                "✓ [green]DuckLake and PostgreSQL extensions loaded successfully[/green]"
             )
             logger.info("DuckDB extensions loaded successfully")
             return True
@@ -138,7 +157,7 @@ def test_postgresql_connection() -> dict[str, str] | None:
             temp_conn.execute("DETACH pg_test")
             temp_conn.close()
 
-            console.print(" [green]PostgreSQL catalog connection successful[/green]")
+            console.print("✓ [green]PostgreSQL catalog connection successful[/green]")
             logger.info("PostgreSQL catalog connection established")
             return pg_config
         except Exception as e:
@@ -147,7 +166,9 @@ def test_postgresql_connection() -> dict[str, str] | None:
             return None
 
 
-def initialize_ducklake(conn: duckdb.DuckDBPyConnection, pg_config: dict[str, str]) -> str | None:
+def initialize_ducklake(
+    conn: duckdb.DuckDBPyConnection, pg_config: dict[str, str]
+) -> str | None:
     """Initialize DuckLake with PostgreSQL catalog."""
     with console.status("[bold blue]Initializing DuckLake..."):
         lake_data_dir = "./ducklake_data"
@@ -183,6 +204,7 @@ def initialize_ducklake(conn: duckdb.DuckDBPyConnection, pg_config: dict[str, st
             info_table.add_row("Database Name", db_name)
             info_table.add_row("Current Tables", str(len(initial_tables)))
 
+            console.print("\n")
             console.print(info_table)
             logger.info(f"DuckLake initialized successfully with database {db_name}")
             return db_name
@@ -194,7 +216,7 @@ def initialize_ducklake(conn: duckdb.DuckDBPyConnection, pg_config: dict[str, st
 
 def create_sample_data(conn: duckdb.DuckDBPyConnection) -> bool | None:
     """Create sample customer and sales data."""
-    console.print(" [bold blue]Creating sample data...[/bold blue]")
+    console.print("\n[bold blue]Creating sample data...[/bold blue]")
 
     # Create customer data
     np.random.seed(42)  # For reproducible results
@@ -231,7 +253,7 @@ def create_sample_data(conn: duckdb.DuckDBPyConnection) -> bool | None:
             cust_result = conn.execute("SELECT COUNT(*) FROM customers").fetchone()
             cust_count = cust_result[0] if cust_result else 0
             console.print(
-                f" [green]Created customers table with [bold]{cust_count}[/bold] records[/green]"
+                f"✓ [green]Created customers table with [bold]{cust_count}[/bold] records[/green]"
             )
             logger.info(f"Created customers table with {cust_count} records")
         except Exception as e:
@@ -250,7 +272,7 @@ def create_sample_data(conn: duckdb.DuckDBPyConnection) -> bool | None:
         "sale_date": pd.date_range("2023-01-01", periods=500, freq="h"),
         "region": np.random.choice(["North", "South", "East", "West"], 500),
     }
-    pd.DataFrame(sales_info)
+    sales_df = pd.DataFrame(sales_info)
 
     with console.status("[bold blue]Creating sales table..."):
         try:
@@ -273,7 +295,7 @@ def create_sample_data(conn: duckdb.DuckDBPyConnection) -> bool | None:
             sales_result = conn.execute("SELECT COUNT(*) FROM sales").fetchone()
             sales_count = sales_result[0] if sales_result else 0
             console.print(
-                f" [green]Created sales table with [bold]{sales_count}[/bold] records[/green]"
+                f"✓ [green]Created sales table with [bold]{sales_count}[/bold] records[/green]"
             )
             logger.info(f"Created sales table with {sales_count} records")
             return True
@@ -285,7 +307,7 @@ def create_sample_data(conn: duckdb.DuckDBPyConnection) -> bool | None:
 
 def demonstrate_queries(conn: duckdb.DuckDBPyConnection) -> bool:
     """Demonstrate basic queries across DuckLake tables."""
-    console.print(" [bold blue]Running sample queries...[/bold blue]")
+    console.print("\n[bold blue]Running sample queries...[/bold blue]")
 
     with console.status("[bold blue]Executing join query..."):
         try:
@@ -303,7 +325,7 @@ def demonstrate_queries(conn: duckdb.DuckDBPyConnection) -> bool:
             LIMIT 10
             """).fetchdf()
 
-            console.print(" [green]Join query executed successfully[/green]")
+            console.print("✓ [green]Join query executed successfully[/green]")
             logger.info("Query executed successfully")
 
             # Create a rich table for the results
@@ -325,6 +347,7 @@ def demonstrate_queries(conn: duckdb.DuckDBPyConnection) -> bool:
                     else "$0.00",
                 )
 
+            console.print("\n")
             console.print(result_table)
             return True
         except Exception as e:
@@ -335,7 +358,7 @@ def demonstrate_queries(conn: duckdb.DuckDBPyConnection) -> bool:
 
 def demonstrate_acid_transactions(conn: duckdb.DuckDBPyConnection) -> bool:
     """Demonstrate ACID transaction capabilities."""
-    console.print("[bold blue]Testing ACID transactions...[/bold blue]")
+    console.print("\n[bold blue]Testing ACID transactions...[/bold blue]")
 
     with console.status("[bold blue]Executing ACID transaction test..."):
         try:
@@ -374,7 +397,7 @@ def demonstrate_acid_transactions(conn: duckdb.DuckDBPyConnection) -> bool:
 
                 if rollback_count == 0:
                     console.print(
-                        " [green]ACID transaction and rollback successful[/green]"
+                        "✓ [green]ACID transaction and rollback successful[/green]"
                     )
                     logger.info("ACID transaction test completed successfully")
                     return True
@@ -398,7 +421,7 @@ def demonstrate_acid_transactions(conn: duckdb.DuckDBPyConnection) -> bool:
 
 def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bool:
     """Demonstrate snapshots and time travel."""
-    console.print("⏰ [bold blue]Testing time travel and snapshots...[/bold blue]")
+    console.print("\n[bold blue]Testing time travel and snapshots...[/bold blue]")
 
     with console.status("[bold blue]Analyzing snapshots and performing time travel..."):
         try:
@@ -428,7 +451,7 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
             snap_count_after = len(snapshots_after)
 
             console.print(
-                f" [green]Snapshots: [bold]{snap_count_before}[/bold] → [bold]{snap_count_after}[/bold][/green]"
+                f"✓ [green]Snapshots: [bold]{snap_count_before}[/bold] → [bold]{snap_count_after}[/bold][/green]"
             )
             logger.info(f"Snapshots created: {snap_count_before} -> {snap_count_after}")
 
@@ -451,6 +474,7 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
             for _, row in ages_after.iterrows():
                 after_table.add_row(str(row["customer_id"]), str(row["age"]))
 
+            console.print("\n")
             console.print(before_table)
             console.print(after_table)
 
@@ -465,7 +489,7 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
                     """).fetchdf()
 
                     console.print(
-                        f" [green]Time travel query successful (version [bold]{previous_version}[/bold] → [bold]{snap_count_after}[/bold])[/green]"
+                        f"✓ [green]Time travel query successful (version [bold]{previous_version}[/bold] → [bold]{snap_count_after}[/bold])[/green]"
                     )
 
                     historical_table = Table(
@@ -481,6 +505,7 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
                             str(row["customer_id"]), str(row["age"])
                         )
 
+                    console.print("\n")
                     console.print(historical_table)
                     logger.info("Time travel query executed successfully")
                 except Exception:
@@ -498,7 +523,7 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
 
 def demonstrate_schema_evolution(conn: duckdb.DuckDBPyConnection) -> bool:
     """Demonstrate schema evolution capabilities."""
-    console.print(" [bold blue]Testing schema evolution...[/bold blue]")
+    console.print("\n[bold blue]Testing schema evolution...[/bold blue]")
 
     with console.status("[bold blue]Evolving schema and updating data..."):
         try:
@@ -524,7 +549,7 @@ def demonstrate_schema_evolution(conn: duckdb.DuckDBPyConnection) -> bool:
             """).fetchdf()
 
             console.print(
-                " [green]Schema evolution successful - added loyalty_points column[/green]"
+                "✓ [green]Schema evolution successful - added loyalty_points column[/green]"
             )
             logger.info("Schema evolution completed successfully")
 
@@ -539,6 +564,7 @@ def demonstrate_schema_evolution(conn: duckdb.DuckDBPyConnection) -> bool:
                     str(row["column_name"]), str(row["column_type"]), str(row["null"])
                 )
 
+            console.print("\n")
             console.print(schema_table)
 
             # Display sample data
@@ -558,6 +584,7 @@ def demonstrate_schema_evolution(conn: duckdb.DuckDBPyConnection) -> bool:
                     str(row["loyalty_points"]),
                 )
 
+            console.print("\n")
             console.print(loyalty_table)
             return True
         except Exception as e:
@@ -568,7 +595,7 @@ def demonstrate_schema_evolution(conn: duckdb.DuckDBPyConnection) -> bool:
 
 def demonstrate_performance(conn: duckdb.DuckDBPyConnection) -> bool:
     """Demonstrate performance analysis."""
-    console.print(" [bold blue]Running performance analysis...[/bold blue]")
+    console.print("\n[bold blue]Running performance analysis...[/bold blue]")
 
     try:
         # Measure query performance with different complexity levels
@@ -629,7 +656,7 @@ def demonstrate_performance(conn: duckdb.DuckDBPyConnection) -> bool:
                 )
                 progress.advance(task)
 
-        console.print("\n [green]Performance analysis complete[/green]")
+        console.print("✓ [green]Performance analysis complete[/green]")
         logger.info("Performance analysis completed")
 
         # Create performance summary table
@@ -643,6 +670,7 @@ def demonstrate_performance(conn: duckdb.DuckDBPyConnection) -> bool:
                 result["query"], f"{result['time_ms']}ms", str(result["rows"])
             )
 
+        console.print("\n")
         console.print(perf_table)
 
         # Show the last query result as example
@@ -657,6 +685,7 @@ def demonstrate_performance(conn: duckdb.DuckDBPyConnection) -> bool:
         for _, row in final_result.head().iterrows():
             sample_table.add_row(*[str(val) for val in row])
 
+        console.print("\n")
         console.print(sample_table)
 
         return True
@@ -669,7 +698,7 @@ def demonstrate_performance(conn: duckdb.DuckDBPyConnection) -> bool:
 def demonstrate_data_compression() -> bool:
     """Demonstrate data compression efficiency."""
     console.print(
-        " [bold blue]Analyzing data compression and storage efficiency...[/bold blue]"
+        "\n[bold blue]Analyzing data compression and storage efficiency...[/bold blue]"
     )
 
     with console.status("[bold blue]Analyzing storage efficiency..."):
@@ -679,7 +708,7 @@ def demonstrate_data_compression() -> bool:
             # Simulate the same data in different formats
             lake_data_dir = "./ducklake_data"
             if not os.path.exists(lake_data_dir):
-                console.print(" [red]DuckLake data directory not found[/red]")
+                console.print("✗ [red]DuckLake data directory not found[/red]")
                 logger.error("DuckLake data directory not found")
                 return False
 
@@ -727,9 +756,7 @@ def demonstrate_data_compression() -> bool:
             )
 
             # Create storage efficiency table
-            storage_table = Table(
-                title=" Storage Efficiency Analysis", box=box.ROUNDED
-            )
+            storage_table = Table(title=" Storage Efficiency Analysis", box=box.ROUNDED)
             storage_table.add_column("Format", style="cyan")
             storage_table.add_column("Size (KB)", justify="right", style="green")
             storage_table.add_column("Files/Details", justify="right", style="blue")
@@ -750,6 +777,7 @@ def demonstrate_data_compression() -> bool:
                 "Uncompressed",
             )
 
+            console.print("\n")
             console.print(storage_table)
 
             # Create compression metrics table
@@ -765,6 +793,7 @@ def demonstrate_data_compression() -> bool:
                 f"{round((1 - ducklake_size / estimated_csv_size) * 100, 1)}%",
             )
 
+            console.print("\n")
             console.print(metrics_table)
 
             # Create advantages panel
@@ -780,6 +809,7 @@ def demonstrate_data_compression() -> bool:
             console.print(advantages_panel)
 
             conn.close()
+            console.print("✓ [green]Data compression analysis completed[/green]")
             logger.info("Data compression analysis completed")
             return True
 
@@ -792,12 +822,12 @@ def demonstrate_data_compression() -> bool:
 def explore_parquet_files() -> bool:
     """Explore the Parquet files created by DuckLake."""
     console.print(
-        " [bold blue]Exploring DuckLake Parquet file structure...[/bold blue]"
+        "[bold blue]Exploring DuckLake Parquet file structure...[/bold blue]"
     )
 
     lake_data_dir = "./ducklake_data"
     if not os.path.exists(lake_data_dir):
-        console.print(" [red]DuckLake data directory not found[/red]")
+        console.print("✗ [red]DuckLake data directory not found[/red]")
         logger.error("DuckLake data directory not found")
         return False
 
@@ -833,6 +863,7 @@ def explore_parquet_files() -> bool:
 
                     files_table.add_row(rel_path, f"{round(file_size / 1024, 2)}")
 
+            console.print("\n")
             console.print(files_table)
 
             # Storage summary
@@ -847,6 +878,7 @@ def explore_parquet_files() -> bool:
             summary_table.add_row("Parquet files", str(len(parquet_files)))
             summary_table.add_row("Total size", f"{round(total_size / 1024, 2)} KB")
 
+            console.print("\n")
             console.print(summary_table)
 
             # Analyze Parquet files with DuckDB
@@ -902,6 +934,7 @@ Columns: {len(file_schema) if not file_schema.empty else "N/A"}"""
 
                 conn.close()
 
+            console.print("✓ [green]Parquet file exploration completed[/green]")
             logger.info("Parquet file exploration completed")
             return True
         except Exception as e:
@@ -912,7 +945,7 @@ Columns: {len(file_schema) if not file_schema.empty else "N/A"}"""
 
 def show_maintenance_info(conn: duckdb.DuckDBPyConnection) -> bool:
     """Show data maintenance and monitoring information."""
-    console.print("[bold blue]Gathering maintenance information...[/bold blue]")
+    console.print("\n[bold blue]Gathering maintenance information...[/bold blue]")
 
     with console.status("[bold blue]Collecting maintenance data..."):
         try:
@@ -942,7 +975,7 @@ def show_maintenance_info(conn: duckdb.DuckDBPyConnection) -> bool:
             except:
                 table_info = pd.DataFrame()
 
-            console.print(" [green]Maintenance operations completed[/green]")
+            console.print("✓ [green]Maintenance operations completed[/green]")
             logger.info("Maintenance information gathered successfully")
 
             # Create table statistics table
@@ -956,6 +989,7 @@ def show_maintenance_info(conn: duckdb.DuckDBPyConnection) -> bool:
                     str(row["table_name"]), str(row["row_count"]), str(row["type"])
                 )
 
+            console.print("\n")
             console.print(stats_table)
 
             # Create catalog info table
@@ -967,6 +1001,7 @@ def show_maintenance_info(conn: duckdb.DuckDBPyConnection) -> bool:
                 for _, row in catalog_info.iterrows():
                     catalog_table.add_row(*[str(val) for val in row])
 
+            console.print("\n")
             console.print(catalog_table)
 
             if (
@@ -985,6 +1020,7 @@ def show_maintenance_info(conn: duckdb.DuckDBPyConnection) -> bool:
                         str(row["table_name"]), str(row["table_type"])
                     )
 
+                console.print("\n")
                 console.print(detailed_table)
 
             return True
@@ -996,14 +1032,14 @@ def show_maintenance_info(conn: duckdb.DuckDBPyConnection) -> bool:
 
 def reset_ducklake_data() -> bool:
     """Reset DuckLake data and snapshots."""
-    console.print(" [bold blue]Resetting DuckLake data...[/bold blue]")
+    console.print("[bold blue]Resetting DuckLake data...[/bold blue]")
 
     with console.status("[bold blue]Cleaning up data and schemas..."):
         try:
             # Remove local data directory
             if os.path.exists("./ducklake_data"):
                 shutil.rmtree("./ducklake_data")
-                console.print(" [green]Removed local data directory[/green]")
+                console.print("✓ [green]Removed local data directory[/green]")
                 logger.info("Local data directory removed")
 
             # Clean PostgreSQL catalog schemas
@@ -1027,17 +1063,17 @@ def reset_ducklake_data() -> bool:
 
             if result.returncode == 0:
                 console.print(
-                    " [green]DuckLake data reset complete! All tables and snapshots removed.[/green]"
+                    "✓ [green]DuckLake data reset complete! All tables and snapshots removed.[/green]"
                 )
                 logger.info("DuckLake data reset completed successfully")
             else:
                 console.print(
-                    f" [yellow]PostgreSQL reset may have issues:[/yellow] {result.stderr}"
+                    f"⚠ [yellow]PostgreSQL reset may have issues:[/yellow] {result.stderr}"
                 )
                 logger.warning(f"PostgreSQL reset issues: {result.stderr}")
             return True
         except Exception as e:
-            console.print(f" [red]Reset failed:[/red] {e}")
+            console.print(f"✗ [red]Reset failed:[/red] {e}")
             logger.error(f"Reset operation failed: {e}")
             return False
 
@@ -1065,9 +1101,9 @@ def reset(verbose: bool) -> None:
         console.print(" [bold blue]Performing data reset...[/bold blue]")
     success = reset_ducklake_data()
     if success and verbose:
-        console.print(" [green]Reset completed successfully[/green]")
+        console.print("✓ [green]Reset completed successfully[/green]")
     elif not success:
-        console.print(" [red]Reset failed[/red]")
+        console.print("✗ [red]Reset failed[/red]")
 
 
 @cli.command()
@@ -1081,23 +1117,20 @@ def demo(no_reset: bool, verbose: bool) -> None:
 def run_demo(no_reset: bool = False, verbose: bool = False) -> None:
     """Main demonstration function."""
     # Create main title panel
-    title_panel = Panel(
-        " DuckLake Tutorial - Simple Python Demo", style="bold blue", box=box.DOUBLE
-    )
+    title_panel = Panel(" DuckLake Tutorial", style="bold blue", box=box.DOUBLE)
     console.print(title_panel)
 
     # Reset by default for clean demo (unless --no-reset is passed)
     if not no_reset:
         console.print(
-            " [bold yellow]Resetting to clean state for fresh demo...[/bold yellow]"
+            "[bold yellow]Resetting to clean state for fresh demo...[/bold yellow]"
         )
         reset_ducklake_data()
 
         # Also remove any existing DuckDB file
         if os.path.exists("ducklake_demo.duckdb"):
             os.remove("ducklake_demo.duckdb")
-            console.print(" [green]Removed existing DuckDB file[/green]")
-        console.print()
+            console.print("✓ [green]Removed existing DuckDB file[/green]")
 
     # Check prerequisites
     if not check_postgresql():
@@ -1108,8 +1141,9 @@ def run_demo(no_reset: bool = False, verbose: bool = False) -> None:
         return
 
     # Create DuckDB connection
-    console.print("\n [bold blue]Creating DuckDB connection...[/bold blue]")
+    console.print("\n[bold blue]Creating DuckDB connection...[/bold blue]")
     conn = duckdb.connect("ducklake_demo.duckdb")
+    console.print("✓ [green]DuckDB connection established[/green]")
     logger.info("DuckDB connection established")
 
     try:
@@ -1165,6 +1199,10 @@ def run_demo(no_reset: bool = False, verbose: bool = False) -> None:
         console.print("\n")
         console.print(summary1_panel)
 
+        # Wait for user confirmation before Phase 2
+        console.print("\n[bold yellow]Press Enter to continue to Phase 2 (ACID Transactions & Time Travel)...[/bold yellow]")
+        input()
+
         # Phase 2
         phase2_content = """ This phase demonstrates:
    • ACID transaction guarantees with rollback
@@ -1206,6 +1244,10 @@ def run_demo(no_reset: bool = False, verbose: bool = False) -> None:
         )
         console.print("\n")
         console.print(summary2_panel)
+
+        # Wait for user confirmation before Phase 3
+        console.print("\n[bold yellow]Press Enter to continue to Phase 3 (Performance, Storage & File Analysis)...[/bold yellow]")
+        input()
 
         # Phase 3
         phase3_content = """ This phase demonstrates:
