@@ -3263,11 +3263,11 @@ if len(snapshots) > 1:
             return
 
         # Explore the Parquet file structure
-        if not explore_parquet_files():
+        if not explore_parquet_files(conn):
             return
 
         # Demonstrate compression efficiency
-        if not demonstrate_data_compression():
+        if not demonstrate_data_compression(conn):
             return
 
         # Show maintenance info
