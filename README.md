@@ -1,61 +1,52 @@
-# DuckLake Tutorial with marimo
+# DuckLake Tutorial
 
-A comprehensive tutorial for exploring DuckDB's DuckLake capabilities using a local PostgreSQL catalog and marimo notebooks.
+A comprehensive tutorial for exploring DuckDB's DuckLake capabilities using PostgreSQL catalog and MinIO object storage.
 
 ## Quick Start
 
-### Prerequisites
-- Docker and Docker Compose
-- [uv](https://docs.astral.sh/uv/) - Python package manager
-- Python 3.9+
-- Git
-
-### 1. Clone and Setup
+### Automated Setup (Recommended)
 ```bash
-git clone <your-repo-url>
-cd ducklake
+./setup.sh
 ```
 
-### 2. Install Dependencies
+### Manual Setup
+
+#### Prerequisites
+- Python 3.10+
+- Podman container runtime
+- UV package manager
+
+#### 1. Install Dependencies
 ```bash
 uv sync
 ```
 
-### 3. Start Everything (One Command!)
+#### 2. Start Services
 ```bash
 uv run task start
 ```
 
-This will:
-- Start PostgreSQL container
-- Wait for database initialization  
-- Launch marimo notebook
-
-**Alternative: Step by step**
+#### 3. Run Demo
 ```bash
-# Start PostgreSQL only
-uv run task docker-up
-
-# Launch notebook (in separate terminal)
-uv run task notebook
+uv run ducklake-demo
 ```
-
-The notebook will open in your browser at `http://localhost:2718`
 
 ## What's Included
 
-- **ducklake_tutorial.py** - Interactive marimo notebook with complete tutorial
-- **docker-compose.yml** - PostgreSQL setup for DuckLake catalog
-- **init.sql** - Database initialization script
-- **PLAN.md** - Detailed implementation plan
-- **pyproject.toml** - Project configuration and dependencies
+- **ducklake_demo.py** - CLI demo script with complete tutorial
+- **ducklake_demo.ipynb** - Jupyter notebook version
+- **helpers.py** - Utility functions for setup and demos
+- **setup.sh** - Automated setup script
+- **setup.md** - Detailed setup guide
+- **pyproject.toml** - Project configuration and task definitions
 
 ## Tutorial Phases
 
 ### Phase 1: Foundation Setup
-- Docker PostgreSQL configuration
+- PostgreSQL catalog configuration
+- MinIO object storage setup
 - DuckDB extensions installation
-- DuckLake initialization with PostgreSQL catalog
+- DuckLake initialization
 
 ### Phase 2: Core Operations
 - Table creation and data ingestion
@@ -65,69 +56,38 @@ The notebook will open in your browser at `http://localhost:2718`
 ### Phase 3: Advanced Features
 - Time travel and snapshots
 - Schema evolution
-- Multi-user access patterns
+- Performance analysis
 
 ### Phase 4: Real-World Patterns
-- Performance analysis
-- Data maintenance operations
-- Best practices and optimization
+- Data compression and storage optimization
+- Parquet file analysis
+- Maintenance operations
 
 ## Key Features Demonstrated
 
 ✅ **Local Development** - No cloud dependencies  
 ✅ **PostgreSQL Catalog** - Familiar SQL database for metadata  
+✅ **MinIO Storage** - S3-compatible object storage  
 ✅ **ACID Transactions** - Full consistency guarantees  
 ✅ **Time Travel** - Historical data access via snapshots  
 ✅ **Schema Evolution** - Safe schema changes  
-✅ **Interactive Learning** - Reactive marimo notebook environment  
+✅ **Columnar Storage** - Efficient Parquet-based storage  
 
 ## Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   marimo        │    │    DuckDB        │    │   PostgreSQL    │
-│   Notebook      │◄──►│    Engine        │◄──►│    Catalog      │
+│   Python        │    │    DuckDB        │    │   PostgreSQL    │
+│   Demo/Notebook │◄──►│    Engine        │◄──►│    Catalog      │
 │                 │    │                  │    │                 │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
                                 │
                                 ▼
                        ┌─────────────────┐
-                       │  Local Parquet  │
-                       │     Files       │
-                       │ (./ducklake_data)│
+                       │      MinIO      │
+                       │   S3 Storage    │
+                       │ (ducklake-bucket)│
                        └─────────────────┘
-```
-
-## Troubleshooting
-
-### PostgreSQL Connection Issues
-```bash
-# Check container status
-uv run task docker-status
-
-# View logs
-uv run task docker-logs
-
-# Restart container
-uv run task docker-down && uv run task docker-up
-```
-
-### DuckDB Extension Issues
-```python
-# In Python/marimo
-import duckdb
-conn = duckdb.connect()
-conn.execute("INSTALL ducklake")
-conn.execute("INSTALL postgres") 
-conn.execute("LOAD ducklake")
-conn.execute("LOAD postgres")
-```
-
-### Port Conflicts
-If port 5432 is in use, modify `docker-compose.yml`:
-```yaml
-ports:
-  - "5433:5432"  # Use different host port
 ```
 
 ## Available Tasks
@@ -135,54 +95,148 @@ ports:
 All tasks are managed via taskipy in `pyproject.toml`:
 
 ```bash
-# Start PostgreSQL container
-uv run task docker-up
+# Service Management
+uv run task start          # Start all services
+uv run task stop           # Stop all services
+uv run task status         # Check service status
 
-# Stop PostgreSQL container  
-uv run task docker-down
+# Individual Services
+uv run task start-postgres # Start PostgreSQL only
+uv run task start-minio    # Start MinIO only
+uv run task create-bucket  # Create MinIO bucket
 
-# Start marimo notebook
-uv run task notebook
+# Monitoring
+uv run task logs           # View combined logs
+uv run task logs-postgres  # PostgreSQL logs only
+uv run task logs-minio     # MinIO logs only
 
-# Complete setup: start docker + marimo
-uv run task start
-
-# Check PostgreSQL status
-uv run task docker-status
-
-# View PostgreSQL logs
-uv run task docker-logs
-
-# Reset everything (stop containers, remove volumes)
-uv run task reset
-
-# Install with dev dependencies
-uv run task dev-install
-
-# Reset DuckLake data only (keep containers running)
-uv run task reset-lake
-
-# Complete clean reset (containers + data)
-uv run task clean-reset
+# Data Management
+uv run task reset-data     # Reset data only
+uv run task reset          # Full reset
+uv run task clean          # Complete cleanup
 ```
 
-## Cleanup
+## Service Configuration
 
-Stop and remove containers:
+**PostgreSQL (Catalog)**
+- Database: `ducklake_catalog`
+- User: `ducklake`
+- Password: `ducklake123`
+- Port: `5432`
+
+**MinIO (Storage)**
+- User: `minioadmin`
+- Password: `minioadmin`
+- API Port: `9000`
+- Console Port: `9001`
+- Console URL: http://localhost:9001
+
+## Environment Variables
+
+Customize configuration in `.env` file:
+
 ```bash
-uv run task docker-down
+# PostgreSQL
+POSTGRES_DB=ducklake_catalog
+POSTGRES_USER=ducklake
+POSTGRES_PASSWORD=ducklake123
+POSTGRES_PORT=5432
 
-# Remove volumes (optional)
-uv run task reset
+# MinIO
+MINIO_USER=minioadmin
+MINIO_PASSWORD=minioadmin
+MINIO_PORT=9000
+MINIO_CONSOLE_PORT=9001
+```
+
+## DuckLake Configuration
+
+### Extension Installation
+```python
+conn.execute("INSTALL ducklake")
+conn.execute("INSTALL postgres")
+conn.execute("INSTALL httpfs")
+conn.execute("LOAD ducklake")
+conn.execute("LOAD postgres")
+conn.execute("LOAD httpfs")
+```
+
+### S3 Configuration for MinIO
+```python
+conn.execute("""
+    SET s3_region='us-east-1';
+    SET s3_access_key_id='minioadmin';
+    SET s3_secret_access_key='minioadmin';
+    SET s3_endpoint='localhost:9000';
+    SET s3_use_ssl=false;
+    SET s3_url_style='path';
+""")
+```
+
+### DuckLake Initialization
+```python
+ducklake_init_query = f"""
+ATTACH 'ducklake:postgres:dbname=ducklake_catalog
+        user=ducklake
+        password=ducklake123
+        host=localhost
+        port=5432' AS ducklake_demo
+        (DATA_PATH 's3://ducklake-bucket/data');
+"""
+conn.execute(ducklake_init_query)
+```
+
+## Troubleshooting
+
+### Service Issues
+```bash
+# Check container status
+uv run task status
+
+# Restart services
+uv run task stop && uv run task start
+
+# View logs
+uv run task logs
+```
+
+### Port Conflicts
+Set different ports in `.env` file:
+```bash
+POSTGRES_PORT=5433
+MINIO_PORT=9001
+MINIO_CONSOLE_PORT=9002
+```
+
+### Complete Reset
+```bash
+uv run task clean  # Stop services, remove volumes
+uv run task start  # Restart everything
+```
+
+## Demo Usage
+
+```bash
+# Run complete demo
+uv run ducklake-demo
+
+# Run without data reset
+uv run ducklake-demo --no-reset
+
+# Manual reset only
+uv run ducklake-demo reset
+
+# Direct Python execution
+python ducklake_demo.py
 ```
 
 ## Resources
 
 - [DuckLake Documentation](https://duckdb.org/docs/stable/core_extensions/ducklake.html)
-- [marimo Documentation](https://docs.marimo.io/)
 - [DuckDB SQL Reference](https://duckdb.org/docs/stable/sql/introduction.html)
-- [uv Documentation](https://docs.astral.sh/uv/)
-- [taskipy Documentation](https://github.com/taskipy/taskipy)
+- [MinIO Documentation](https://docs.min.io/)
+- [UV Documentation](https://docs.astral.sh/uv/)
+- [Taskipy Documentation](https://github.com/taskipy/taskipy)
 
 ## License
 
