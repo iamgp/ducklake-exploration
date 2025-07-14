@@ -44,6 +44,10 @@ get_user_config() {
     read -p "Enter installation directory [./ducklake]: " INSTALL_DIR
     INSTALL_DIR=${INSTALL_DIR:-./ducklake}
     
+    # Get instance name for this DuckLake setup
+    read -p "Enter instance name [default]: " INSTANCE_NAME
+    INSTANCE_NAME=${INSTANCE_NAME:-default}
+    
     # Create directory if it doesn't exist
     if [ ! -d "$INSTALL_DIR" ]; then
         mkdir -p "$INSTALL_DIR"
@@ -77,8 +81,18 @@ get_user_config() {
     echo
     DB_PASS=${DB_PASS:-ducklake123}
     
+    # Get port numbers for this instance
+    read -p "Enter PostgreSQL port [5432]: " POSTGRES_PORT
+    POSTGRES_PORT=${POSTGRES_PORT:-5432}
+    
+    read -p "Enter MinIO port [9000]: " MINIO_PORT
+    MINIO_PORT=${MINIO_PORT:-9000}
+    
+    read -p "Enter MinIO console port [9001]: " MINIO_CONSOLE_PORT
+    MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT:-9001}
+    
     # Export for use in other functions
-    export BUCKET_NAME DATA_PATH DB_NAME DB_USER DB_PASS INSTALL_DIR
+    export BUCKET_NAME DATA_PATH DB_NAME DB_USER DB_PASS INSTALL_DIR INSTANCE_NAME POSTGRES_PORT MINIO_PORT MINIO_CONSOLE_PORT
     
     echo
     print_success "Configuration saved:"
@@ -131,22 +145,22 @@ packages = ["ducklake_server"]
 
 [tool.taskipy.tasks]
 # Core service management
-start-postgres = "podman run -d --name ducklake-postgres --replace -e POSTGRES_DB=${DB_NAME} -e POSTGRES_USER=${DB_USER} -e POSTGRES_PASSWORD=${DB_PASS} -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 -v postgres_data:/var/lib/postgresql/data -v $(pwd)/init.sql:/docker-entrypoint-initdb.d/init.sql docker.io/library/postgres:15"
-start-minio = "podman run -d --name ducklake-minio --replace -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin -p 9000:9000 -p 9001:9001 -v minio_data:/data quay.io/minio/minio:latest server /data --console-address :9001"
-create-bucket = "sleep 5 && podman exec ducklake-minio mc alias set local http://localhost:9000 minioadmin minioadmin && podman exec ducklake-minio mc mb local/${BUCKET_NAME} 2>/dev/null || true"
+start-postgres = "podman run -d --name ducklake-postgres-${INSTANCE_NAME} --replace -e POSTGRES_DB=${DB_NAME} -e POSTGRES_USER=${DB_USER} -e POSTGRES_PASSWORD=${DB_PASS} -e POSTGRES_HOST_AUTH_METHOD=trust -p ${POSTGRES_PORT}:5432 -v postgres_data_${INSTANCE_NAME}:/var/lib/postgresql/data -v $(pwd)/init.sql:/docker-entrypoint-initdb.d/init.sql docker.io/library/postgres:15"
+start-minio = "podman run -d --name ducklake-minio-${INSTANCE_NAME} --replace -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin -p ${MINIO_PORT}:9000 -p ${MINIO_CONSOLE_PORT}:9001 -v minio_data_${INSTANCE_NAME}:/data quay.io/minio/minio:latest server /data --console-address :9001"
+create-bucket = "sleep 5 && podman exec ducklake-minio-${INSTANCE_NAME} mc alias set local http://localhost:9000 minioadmin minioadmin && podman exec ducklake-minio-${INSTANCE_NAME} mc mb local/${BUCKET_NAME} 2>/dev/null || true"
 start = "task start-postgres && task start-minio && task create-bucket"
 
-stop-postgres = "podman stop ducklake-postgres 2>/dev/null || true && podman rm ducklake-postgres 2>/dev/null || true"
-stop-minio = "podman stop ducklake-minio 2>/dev/null || true && podman rm ducklake-minio 2>/dev/null || true"
+stop-postgres = "podman stop ducklake-postgres-${INSTANCE_NAME} 2>/dev/null || true && podman rm ducklake-postgres-${INSTANCE_NAME} 2>/dev/null || true"
+stop-minio = "podman stop ducklake-minio-${INSTANCE_NAME} 2>/dev/null || true && podman rm ducklake-minio-${INSTANCE_NAME} 2>/dev/null || true"
 stop = "task stop-postgres && task stop-minio"
 
 # Status and monitoring
-status = "podman ps --filter name=ducklake"
-logs-postgres = "podman logs -f ducklake-postgres"
-logs-minio = "podman logs -f ducklake-minio"
+status = "podman ps --filter name=ducklake-*-${INSTANCE_NAME}"
+logs-postgres = "podman logs -f ducklake-postgres-${INSTANCE_NAME}"
+logs-minio = "podman logs -f ducklake-minio-${INSTANCE_NAME}"
 
 # Data management
-clean = "task stop && podman volume rm minio_data postgres_data 2>/dev/null || true"
+clean = "task stop && podman volume rm minio_data_${INSTANCE_NAME} postgres_data_${INSTANCE_NAME} 2>/dev/null || true"
 reset = "task clean && task start"
 EOF
 
@@ -415,6 +429,39 @@ uv sync
 
 print_success "Python dependencies installed"
 
+# Check for port conflicts
+print_status "Checking for port conflicts..."
+CONFLICTING_CONTAINERS=""
+
+# Check each port for conflicts
+for port in $POSTGRES_PORT $MINIO_PORT $MINIO_CONSOLE_PORT; do
+    CONTAINER=$(podman ps --format "{{.Names}}" --filter "publish=$port" 2>/dev/null | head -1)
+    if [ -n "$CONTAINER" ]; then
+        CONFLICTING_CONTAINERS="$CONFLICTING_CONTAINERS $CONTAINER"
+    fi
+done
+
+if [ -n "$CONFLICTING_CONTAINERS" ]; then
+    print_warning "Found containers using required ports:"
+    for container in $CONFLICTING_CONTAINERS; do
+        PORTS=$(podman ps --format "{{.Ports}}" --filter "name=$container")
+        echo "  $container: $PORTS"
+    done
+    echo ""
+    read -p "Stop and remove conflicting containers? [y/N]: " STOP_CONFLICTING
+    if [ "$STOP_CONFLICTING" = "y" ] || [ "$STOP_CONFLICTING" = "Y" ]; then
+        print_status "Stopping conflicting containers..."
+        for container in $CONFLICTING_CONTAINERS; do
+            podman stop "$container" 2>/dev/null || true
+            podman rm "$container" 2>/dev/null || true
+            echo "  Removed: $container"
+        done
+    else
+        print_error "Cannot continue with port conflicts"
+        exit 1
+    fi
+fi
+
 # Start services
 print_status "Starting DuckLake services..."
 uv run task start
@@ -427,7 +474,7 @@ check_service() {
     
     print_status "Waiting for $service_name to be ready..."
     while [ $attempt -lt $max_attempts ]; do
-        if uv run task status 2>/dev/null | grep -q "$service_name"; then
+        if podman ps --filter name="$service_name" --format "{{.Names}}" 2>/dev/null | grep -q "$service_name"; then
             return 0
         fi
         sleep 1
@@ -439,7 +486,7 @@ check_service() {
     return 1
 }
 
-if check_service "ducklake-postgres"; then
+if check_service "ducklake-postgres-${INSTANCE_NAME}"; then
     print_success "PostgreSQL is running"
 else
     print_error "PostgreSQL failed to start"
@@ -447,7 +494,7 @@ else
     exit 1
 fi
 
-if check_service "ducklake-minio"; then
+if check_service "ducklake-minio-${INSTANCE_NAME}"; then
     print_success "MinIO is running"
 else
     print_error "MinIO failed to start"
@@ -469,9 +516,9 @@ print_success "DuckLake Server Setup Complete!"
 echo "=================================================="
 echo ""
 echo "Services Status:"
-echo "  PostgreSQL Catalog: $SERVER_IP:5432"
-echo "  MinIO Object Storage: $SERVER_IP:9000"
-echo "  MinIO Web Console: http://$SERVER_IP:9001"
+echo "  PostgreSQL Catalog: $SERVER_IP:$POSTGRES_PORT"
+echo "  MinIO Object Storage: $SERVER_IP:$MINIO_PORT"
+echo "  MinIO Web Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT"
 echo ""
 echo "Credentials:"
 echo "  PostgreSQL: ${DB_USER} / ${DB_PASS}"
@@ -500,7 +547,7 @@ conn.execute(f"""
     SET s3_region='us-east-1';
     SET s3_access_key_id='minioadmin';
     SET s3_secret_access_key='minioadmin';
-    SET s3_endpoint='$SERVER_IP:9000';
+    SET s3_endpoint='$SERVER_IP:$MINIO_PORT';
     SET s3_use_ssl=false;
     SET s3_url_style='path';
 """)
@@ -511,7 +558,7 @@ conn.execute(f"""
             user=${DB_USER}  
             password=${DB_PASS}
             host=$SERVER_IP
-            port=5432' AS remote_ducklake
+            port=$POSTGRES_PORT' AS remote_ducklake
             (DATA_PATH 's3://${BUCKET_NAME}/${DATA_PATH}');
 """)
 
@@ -546,7 +593,7 @@ echo "  Logs:      cd $DUCKLAKE_DIR && uv run task logs-postgres"
 echo "  Cleanup:   cd $DUCKLAKE_DIR && uv run task clean"
 echo ""
 echo "Web Interfaces:"
-echo "  MinIO Console: http://$SERVER_IP:9001 (minioadmin/minioadmin)"
+echo "  MinIO Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT (minioadmin/minioadmin)"
 echo ""
 echo "Installation Directory: $DUCKLAKE_DIR"
 echo ""
