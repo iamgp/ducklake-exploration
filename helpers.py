@@ -132,7 +132,7 @@ def setup_extensions(
             conn.execute("LOAD ducklake")
             conn.execute("LOAD postgres")
             conn.execute("LOAD httpfs")
-            
+
             # Configure S3 settings for MinIO
             conn.execute("""
                 SET s3_region='us-east-1';
@@ -142,7 +142,7 @@ def setup_extensions(
                 SET s3_use_ssl=false;
                 SET s3_url_style='path';
             """)
-            
+
             console.print(
                 "✓ [green]DuckLake, PostgreSQL, and S3 extensions loaded successfully[/green]"
             )
@@ -363,7 +363,7 @@ def reset_ducklake_data() -> bool:
             if os.path.exists("ducklake_demo.duckdb"):
                 os.remove("ducklake_demo.duckdb")
                 console.print("✓ [green]Removed existing DuckDB file[/green]")
-                
+
             # Note: S3 bucket cleanup is handled by MinIO container restart
             console.print("✓ [green]S3 data will be stored in MinIO bucket[/green]")
 
@@ -469,9 +469,11 @@ def demonstrate_acid_transactions(conn: duckdb.DuckDBPyConnection) -> bool:
         # Show initial state
         initial_customers = conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
         initial_sales = conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
-        
-        console.print(f"📊 [cyan]Initial state:[/cyan] {initial_customers} customers, {initial_sales} sales")
-        
+
+        console.print(
+            f"📊 [cyan]Initial state:[/cyan] {initial_customers} customers, {initial_sales} sales"
+        )
+
         # Start transaction
         console.print("\n🔄 [yellow]Starting transaction...[/yellow]")
         conn.begin()
@@ -490,38 +492,57 @@ def demonstrate_acid_transactions(conn: duckdb.DuckDBPyConnection) -> bool:
         # Show state during transaction
         tx_customers = conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
         tx_sales = conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
-        
-        console.print(f"📈 [green]During transaction:[/green] {tx_customers} customers (+{tx_customers-initial_customers}), {tx_sales} sales (+{tx_sales-initial_sales})")
+
+        console.print(
+            f"📈 [green]During transaction:[/green] {tx_customers} customers (+{tx_customers - initial_customers}), {tx_sales} sales (+{tx_sales - initial_sales})"
+        )
 
         # Show the actual inserted data
-        test_customer = conn.execute("SELECT name, city, age FROM customers WHERE customer_id = 101").fetchone()
-        test_sale = conn.execute("SELECT product_name, amount FROM sales WHERE sale_id = 501").fetchone()
+        test_customer = conn.execute(
+            "SELECT name, city, age FROM customers WHERE customer_id = 101"
+        ).fetchone()
+        test_sale = conn.execute(
+            "SELECT product_name, amount FROM sales WHERE sale_id = 501"
+        ).fetchone()
 
         if test_customer and test_sale:
             # Display inserted data
             tx_table = Table(title="Data Inserted in Transaction", box=box.ROUNDED)
             tx_table.add_column("Table", style="cyan")
             tx_table.add_column("Record", style="green")
-            
-            tx_table.add_row("Customer", f"{test_customer[0]} from {test_customer[1]}, age {test_customer[2]}")
+
+            tx_table.add_row(
+                "Customer",
+                f"{test_customer[0]} from {test_customer[1]}, age {test_customer[2]}",
+            )
             tx_table.add_row("Sale", f"{test_sale[0]} for ${test_sale[1]:.2f}")
-            
+
             console.print("\n")
             console.print(tx_table)
 
             # NOW ROLLBACK - This is the ACID demonstration
-            console.print("\n🔄 [yellow]Rolling back transaction (ACID Atomicity)...[/yellow]")
+            console.print(
+                "\n🔄 [yellow]Rolling back transaction (ACID Atomicity)...[/yellow]"
+            )
             conn.rollback()
 
             # Show final state after rollback
-            final_customers = conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
+            final_customers = conn.execute("SELECT COUNT(*) FROM customers").fetchone()[
+                0
+            ]
             final_sales = conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
-            
-            console.print(f"📊 [blue]After rollback:[/blue] {final_customers} customers, {final_sales} sales")
+
+            console.print(
+                f"📊 [blue]After rollback:[/blue] {final_customers} customers, {final_sales} sales"
+            )
 
             # Verify the specific records are gone
-            verify_customer = conn.execute("SELECT COUNT(*) FROM customers WHERE customer_id = 101").fetchone()[0]
-            verify_sale = conn.execute("SELECT COUNT(*) FROM sales WHERE sale_id = 501").fetchone()[0]
+            verify_customer = conn.execute(
+                "SELECT COUNT(*) FROM customers WHERE customer_id = 101"
+            ).fetchone()[0]
+            verify_sale = conn.execute(
+                "SELECT COUNT(*) FROM sales WHERE sale_id = 501"
+            ).fetchone()[0]
 
             # Create result table
             result_table = Table(title="ACID Transaction Results", box=box.ROUNDED)
@@ -529,27 +550,45 @@ def demonstrate_acid_transactions(conn: duckdb.DuckDBPyConnection) -> bool:
             result_table.add_column("Before", justify="center", style="blue")
             result_table.add_column("During TX", justify="center", style="green")
             result_table.add_column("After Rollback", justify="center", style="red")
-            
-            result_table.add_row("Customers", str(initial_customers), str(tx_customers), str(final_customers))
-            result_table.add_row("Sales", str(initial_sales), str(tx_sales), str(final_sales))
+
+            result_table.add_row(
+                "Customers",
+                str(initial_customers),
+                str(tx_customers),
+                str(final_customers),
+            )
+            result_table.add_row(
+                "Sales", str(initial_sales), str(tx_sales), str(final_sales)
+            )
             result_table.add_row("Test Customer", "❌", "✅", "❌")
             result_table.add_row("Test Sale", "❌", "✅", "❌")
 
             console.print("\n")
             console.print(result_table)
 
-            if final_customers == initial_customers and final_sales == initial_sales and verify_customer == 0 and verify_sale == 0:
-                console.print("\n✅ [green]ACID Atomicity demonstrated: Transaction rolled back completely![/green]")
-                console.print("   [dim]All changes were undone as a single unit - no partial state exists[/dim]")
+            if (
+                final_customers == initial_customers
+                and final_sales == initial_sales
+                and verify_customer == 0
+                and verify_sale == 0
+            ):
+                console.print(
+                    "\n✅ [green]ACID Atomicity demonstrated: Transaction rolled back completely![/green]"
+                )
+                console.print(
+                    "   [dim]All changes were undone as a single unit - no partial state exists[/dim]"
+                )
                 logger.info("ACID transaction test completed successfully")
                 return True
             else:
-                console.print("❌ [red]Rollback incomplete - ACID properties violated[/red]")
+                console.print(
+                    "❌ [red]Rollback incomplete - ACID properties violated[/red]"
+                )
                 return False
         else:
             console.print("❌ [red]Transaction insert failed[/red]")
             return False
-            
+
     except Exception as e:
         console.print(f"❌ [red]ACID test failed:[/red] {e}")
         logger.error(f"ACID test failed: {e}")
@@ -572,12 +611,16 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
         snap_count_before = len(snapshots_before)
 
         console.print(f"📸 [cyan]Current snapshot count:[/cyan] {snap_count_before}")
-        
+
         # Debug: Show available snapshots
         if not snapshots_before.empty:
-            console.print(f"🔍 [dim]Available snapshots: {list(snapshots_before.index)}[/dim]")
-            if 'snapshot_id' in snapshots_before.columns:
-                console.print(f"🔍 [dim]Snapshot IDs: {list(snapshots_before['snapshot_id'])}[/dim]")
+            console.print(
+                f"🔍 [dim]Available snapshots: {list(snapshots_before.index)}[/dim]"
+            )
+            if "snapshot_id" in snapshots_before.columns:
+                console.print(
+                    f"🔍 [dim]Snapshot IDs: {list(snapshots_before['snapshot_id'])}[/dim]"
+                )
         else:
             console.print("🔍 [dim]No snapshot metadata available[/dim]")
 
@@ -590,9 +633,12 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
         """).fetchdf()
 
         console.print(f"👥 [cyan]Sample customers before changes:[/cyan]")
-        
+
         # Show initial state
-        initial_table = Table(title="Initial State (Snapshot " + str(snap_count_before) + ")", box=box.ROUNDED)
+        initial_table = Table(
+            title="Initial State (Snapshot " + str(snap_count_before) + ")",
+            box=box.ROUNDED,
+        )
         initial_table.add_column("ID", justify="center")
         initial_table.add_column("Name", style="cyan")
         initial_table.add_column("Age", justify="center", style="blue")
@@ -600,10 +646,10 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
 
         for _, row in sample_customers.iterrows():
             initial_table.add_row(
-                str(row["customer_id"]), 
-                str(row["name"]), 
-                str(row["age"]), 
-                str(row["city"])
+                str(row["customer_id"]),
+                str(row["name"]),
+                str(row["age"]),
+                str(row["city"]),
             )
 
         console.print(initial_table)
@@ -632,7 +678,9 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
         ).fetchdf()
         snap_count_after = len(snapshots_after)
 
-        console.print(f"📸 [green]New snapshot created:[/green] {snap_count_before} → {snap_count_after}")
+        console.print(
+            f"📸 [green]New snapshot created:[/green] {snap_count_before} → {snap_count_after}"
+        )
 
         # Get updated data
         updated_customers = conn.execute("""
@@ -644,8 +692,11 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
 
         # Show current state
         console.print(f"\n👥 [green]Current state after changes:[/green]")
-        
-        current_table = Table(title="Current State (Snapshot " + str(snap_count_after) + ")", box=box.ROUNDED)
+
+        current_table = Table(
+            title="Current State (Snapshot " + str(snap_count_after) + ")",
+            box=box.ROUNDED,
+        )
         current_table.add_column("ID", justify="center")
         current_table.add_column("Name", style="cyan")
         current_table.add_column("Age", justify="center", style="green")
@@ -653,10 +704,10 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
 
         for _, row in updated_customers.iterrows():
             current_table.add_row(
-                str(row["customer_id"]), 
-                str(row["name"]), 
-                str(row["age"]), 
-                str(row["city"])
+                str(row["customer_id"]),
+                str(row["name"]),
+                str(row["age"]),
+                str(row["city"]),
             )
 
         console.print(current_table)
@@ -664,13 +715,15 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
         # Now demonstrate time travel
         if snap_count_after > snap_count_before:
             console.print(f"\n🕰️ [yellow]Time travel demonstration:[/yellow]")
-            console.print(f"   [dim]Querying data as it was in snapshot {snap_count_before}...[/dim]")
-            
+            console.print(
+                f"   [dim]Querying data as it was in snapshot {snap_count_before}...[/dim]"
+            )
+
             try:
                 # Try different snapshot versions to find the right one
                 historical_customers = None
                 successful_version = None
-                
+
                 for version_to_try in [snap_count_before, snap_count_before - 1, 1]:
                     if version_to_try >= 1:
                         try:
@@ -680,17 +733,21 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
                             WHERE customer_id <= 5 
                             ORDER BY customer_id
                             """).fetchdf()
-                            
+
                             # Check if this version gives us the original data
                             if test_data.equals(sample_customers):
                                 historical_customers = test_data
                                 successful_version = version_to_try
-                                console.print(f"✅ [green]Found correct historical version: {version_to_try}[/green]")
+                                console.print(
+                                    f"✅ [green]Found correct historical version: {version_to_try}[/green]"
+                                )
                                 break
                         except Exception as e:
-                            console.print(f"🔍 [dim]Version {version_to_try} failed: {e}[/dim]")
+                            console.print(
+                                f"🔍 [dim]Version {version_to_try} failed: {e}[/dim]"
+                            )
                             continue
-                
+
                 if historical_customers is None:
                     # Just use the snapshot before count as fallback
                     previous_version = snap_count_before
@@ -701,12 +758,19 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
                     ORDER BY customer_id
                     """).fetchdf()
                     successful_version = previous_version
-                    console.print(f"⚠️ [yellow]Using snapshot {previous_version} (may not match exactly)[/yellow]")
-                
-                console.print(f"✅ [green]Time travel successful! Retrieved data from snapshot {successful_version}[/green]")
+                    console.print(
+                        f"⚠️ [yellow]Using snapshot {previous_version} (may not match exactly)[/yellow]"
+                    )
+
+                console.print(
+                    f"✅ [green]Time travel successful! Retrieved data from snapshot {successful_version}[/green]"
+                )
 
                 # Show historical data
-                historical_table = Table(title=f"Historical Data (Time Travel to Snapshot {successful_version})", box=box.ROUNDED)
+                historical_table = Table(
+                    title=f"Historical Data (Time Travel to Snapshot {successful_version})",
+                    box=box.ROUNDED,
+                )
                 historical_table.add_column("ID", justify="center")
                 historical_table.add_column("Name", style="cyan")
                 historical_table.add_column("Age", justify="center", style="yellow")
@@ -714,10 +778,10 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
 
                 for _, row in historical_customers.iterrows():
                     historical_table.add_row(
-                        str(row["customer_id"]), 
-                        str(row["name"]), 
-                        str(row["age"]), 
-                        str(row["city"])
+                        str(row["customer_id"]),
+                        str(row["name"]),
+                        str(row["age"]),
+                        str(row["city"]),
                     )
 
                 console.print("\n")
@@ -725,65 +789,78 @@ def demonstrate_time_travel(conn: duckdb.DuckDBPyConnection, db_name: str) -> bo
 
                 # Create comparison table showing changes
                 console.print(f"\n📊 [blue]Change Analysis:[/blue]")
-                
-                comparison_table = Table(title="Before vs After Comparison", box=box.ROUNDED)
+
+                comparison_table = Table(
+                    title="Before vs After Comparison", box=box.ROUNDED
+                )
                 comparison_table.add_column("Customer", style="cyan")
-                comparison_table.add_column("Age Change", justify="center", style="blue")
+                comparison_table.add_column(
+                    "Age Change", justify="center", style="blue"
+                )
                 comparison_table.add_column("City Change", style="magenta")
 
                 for i in range(len(sample_customers)):
                     old_row = sample_customers.iloc[i]
                     new_row = updated_customers.iloc[i]
-                    
+
                     age_change = f"{old_row['age']} → {new_row['age']}"
                     city_change = f"{old_row['city']} → {new_row['city']}"
-                    
+
                     comparison_table.add_row(
-                        str(old_row["name"]),
-                        age_change,
-                        city_change
+                        str(old_row["name"]), age_change, city_change
                     )
 
                 console.print(comparison_table)
 
                 # Show SQL examples
                 console.print(f"\n💡 [blue]Time Travel SQL Examples:[/blue]")
-                
-                sql_examples = Table(title="Time Travel Query Patterns", box=box.ROUNDED)
+
+                sql_examples = Table(
+                    title="Time Travel Query Patterns", box=box.ROUNDED
+                )
                 sql_examples.add_column("Purpose", style="cyan")
                 sql_examples.add_column("SQL Query", style="green")
-                
+
                 sql_examples.add_row(
-                    "Current data", 
-                    "SELECT * FROM customers WHERE customer_id <= 5"
+                    "Current data", "SELECT * FROM customers WHERE customer_id <= 5"
                 )
                 sql_examples.add_row(
-                    "Historical data", 
-                    f"SELECT * FROM customers AT (VERSION => {successful_version}) WHERE customer_id <= 5"
+                    "Historical data",
+                    f"SELECT * FROM customers AT (VERSION => {successful_version}) WHERE customer_id <= 5",
                 )
                 sql_examples.add_row(
-                    "Compare versions", 
-                    f"SELECT c1.customer_id, c1.age as old_age, c2.age as new_age FROM customers AT (VERSION => {successful_version}) c1 JOIN customers c2 ON c1.customer_id = c2.customer_id"
+                    "Compare versions",
+                    f"SELECT c1.customer_id, c1.age as old_age, c2.age as new_age FROM customers AT (VERSION => {successful_version}) c1 JOIN customers c2 ON c1.customer_id = c2.customer_id",
                 )
 
                 console.print(sql_examples)
 
                 console.print(f"\n🎯 [green]Time Travel Summary:[/green]")
                 console.print(f"   • [cyan]Total snapshots:[/cyan] {snap_count_after}")
-                console.print(f"   • [cyan]Can query any snapshot:[/cyan] 1 to {snap_count_after}")
-                console.print(f"   • [cyan]Data is immutable:[/cyan] Historical versions never change")
-                console.print(f"   • [cyan]Perfect for:[/cyan] Audit trails, debugging, compliance")
+                console.print(
+                    f"   • [cyan]Can query any snapshot:[/cyan] 1 to {snap_count_after}"
+                )
+                console.print(
+                    f"   • [cyan]Data is immutable:[/cyan] Historical versions never change"
+                )
+                console.print(
+                    f"   • [cyan]Perfect for:[/cyan] Audit trails, debugging, compliance"
+                )
 
                 logger.info("Time travel demonstration completed successfully")
                 return True
-                
+
             except Exception as e:
                 console.print(f"❌ [red]Time travel query failed:[/red] {e}")
-                console.print(f"   [dim]But snapshot creation was successful ({snap_count_before} → {snap_count_after})[/dim]")
+                console.print(
+                    f"   [dim]But snapshot creation was successful ({snap_count_before} → {snap_count_after})[/dim]"
+                )
                 logger.warning(f"Time travel query failed: {e}")
                 return True
         else:
-            console.print("⚠️ [yellow]No new snapshot created - no changes detected[/yellow]")
+            console.print(
+                "⚠️ [yellow]No new snapshot created - no changes detected[/yellow]"
+            )
             return True
 
     except Exception as e:
@@ -976,7 +1053,7 @@ def demonstrate_data_compression(conn: duckdb.DuckDBPyConnection = None) -> bool
         try:
             # Create comparison data to show compression benefits
             s3_data_path = "s3://ducklake-bucket/data"
-            
+
             # Use existing connection or create new one
             if conn is None:
                 conn = duckdb.connect(":memory:")
@@ -1007,8 +1084,10 @@ def demonstrate_data_compression(conn: duckdb.DuckDBPyConnection = None) -> bool
                         SET s3_url_style='path';
                     """)
                 except Exception as e:
-                    console.print(f"[yellow]Could not reconfigure S3 settings: {e}[/yellow]")
-            
+                    console.print(
+                        f"[yellow]Could not reconfigure S3 settings: {e}[/yellow]"
+                    )
+
             try:
                 # Test S3 connection
                 conn.execute("SELECT 1")
@@ -1022,24 +1101,38 @@ def demonstrate_data_compression(conn: duckdb.DuckDBPyConnection = None) -> bool
             parquet_files = 0
             has_s3_data = False
             try:
-                s3_files_query = f"SELECT * FROM glob('{s3_data_path}/main/**/*.parquet')"
+                s3_files_query = (
+                    f"SELECT * FROM glob('{s3_data_path}/main/**/*.parquet')"
+                )
                 s3_files_df = conn.execute(s3_files_query).fetchdf()
                 parquet_files = len(s3_files_df)
                 has_s3_data = not s3_files_df.empty
-                
+
                 if s3_files_df.empty:
-                    console.print("[yellow]No parquet files found in S3 bucket[/yellow]")
-                    console.print("[yellow]This may be normal if no data has been written yet[/yellow]")
-                    
+                    console.print(
+                        "[yellow]No parquet files found in S3 bucket[/yellow]"
+                    )
+                    console.print(
+                        "[yellow]This may be normal if no data has been written yet[/yellow]"
+                    )
+
             except Exception as e:
                 error_msg = str(e)
                 if "404" in error_msg and "Not Found" in error_msg:
-                    console.print("[yellow]S3 bucket not found - may need to create bucket first[/yellow]")
-                elif "Connection refused" in error_msg or "timeout" in error_msg.lower():
-                    console.print("[yellow]MinIO server not accessible - check if MinIO is running on localhost:9000[/yellow]")
+                    console.print(
+                        "[yellow]S3 bucket not found - may need to create bucket first[/yellow]"
+                    )
+                elif (
+                    "Connection refused" in error_msg or "timeout" in error_msg.lower()
+                ):
+                    console.print(
+                        "[yellow]MinIO server not accessible - check if MinIO is running on localhost:9000[/yellow]"
+                    )
                 else:
                     console.print(f"[yellow]Could not list S3 files: {e}[/yellow]")
-                console.print("[yellow]Will show estimated compression metrics[/yellow]")
+                console.print(
+                    "[yellow]Will show estimated compression metrics[/yellow]"
+                )
                 parquet_files = 0
                 has_s3_data = False
 
@@ -1112,7 +1205,7 @@ def demonstrate_data_compression(conn: duckdb.DuckDBPyConnection = None) -> bool
                 "Compression Ratio", f"{compression_ratio}:1 (vs CSV)"
             )
             # Calculate space savings based on compression ratio
-            space_savings = round((1 - 1/compression_ratio) * 100, 1)
+            space_savings = round((1 - 1 / compression_ratio) * 100, 1)
             metrics_table.add_row(
                 "Space Savings",
                 f"{space_savings}% (estimated)",
@@ -1149,7 +1242,7 @@ def explore_parquet_files(conn: duckdb.DuckDBPyConnection = None) -> bool:
     console.print("[bold blue]Exploring DuckLake Parquet file structure...[/bold blue]")
 
     s3_data_path = "s3://ducklake-bucket/data"
-    
+
     # Use existing connection or create new one
     if conn is None:
         conn = duckdb.connect(":memory:")
@@ -1181,19 +1274,21 @@ def explore_parquet_files(conn: duckdb.DuckDBPyConnection = None) -> bool:
             """)
         except Exception as e:
             console.print(f"[yellow]Could not reconfigure S3 settings: {e}[/yellow]")
-    
+
     try:
         # Test S3 connection and settings
         conn.execute("SELECT 1")
-        
+
         # Check S3 settings
         try:
-            s3_settings = conn.execute("SELECT name, value FROM duckdb_settings() WHERE name LIKE 's3_%'").fetchall()
+            s3_settings = conn.execute(
+                "SELECT name, value FROM duckdb_settings() WHERE name LIKE 's3_%'"
+            ).fetchall()
             console.print(f"✓ [green]Using configured S3 connection[/green]")
             console.print(f"[dim]S3 settings: {dict(s3_settings)}[/dim]")
         except:
             console.print(f"✓ [green]Using configured S3 connection[/green]")
-            
+
     except Exception as e:
         console.print(f"✗ [red]S3 connection test failed:[/red] {e}")
         logger.error(f"S3 connection test failed: {e}")
@@ -1207,47 +1302,67 @@ def explore_parquet_files(conn: duckdb.DuckDBPyConnection = None) -> bool:
             try:
                 # First try a simple S3 test
                 console.print(f"[dim]Testing S3 access to {s3_data_path}[/dim]")
-                
+
                 # Try to list any files first
                 test_query = f"SELECT * FROM glob('{s3_data_path}/*') LIMIT 5"
                 test_df = conn.execute(test_query).fetchdf()
-                console.print(f"[dim]Found {len(test_df)} items in root data path[/dim]")
-                
+                console.print(
+                    f"[dim]Found {len(test_df)} items in root data path[/dim]"
+                )
+
                 # Now try the main query
-                s3_files_query = f"SELECT * FROM glob('{s3_data_path}/main/**/*.parquet')"
+                s3_files_query = (
+                    f"SELECT * FROM glob('{s3_data_path}/main/**/*.parquet')"
+                )
                 console.print(f"[dim]Running query: {s3_files_query}[/dim]")
                 s3_files_df = conn.execute(s3_files_query).fetchdf()
-                
+
                 if s3_files_df.empty:
-                    console.print("[yellow]No parquet files found in S3 bucket[/yellow]")
-                    console.print("[yellow]This may be normal if no data has been written yet[/yellow]")
+                    console.print(
+                        "[yellow]No parquet files found in S3 bucket[/yellow]"
+                    )
+                    console.print(
+                        "[yellow]This may be normal if no data has been written yet[/yellow]"
+                    )
                     return True
-                    
+
                 parquet_files = []
-                files_table = Table(title=" Files in DuckLake S3 Bucket", box=box.ROUNDED)
+                files_table = Table(
+                    title=" Files in DuckLake S3 Bucket", box=box.ROUNDED
+                )
                 files_table.add_column("File Path", style="cyan")
                 files_table.add_column("Info", style="green")
-                
+
                 for _, row in s3_files_df.iterrows():
-                    file_path = row['file'] if 'file' in row else str(row[0])
-                    rel_path = file_path.replace(s3_data_path + '/', '')
-                    
-                    parquet_files.append({
-                        "file": rel_path,
-                        "full_path": file_path,
-                    })
-                    
+                    file_path = row["file"] if "file" in row else str(row[0])
+                    rel_path = file_path.replace(s3_data_path + "/", "")
+
+                    parquet_files.append(
+                        {
+                            "file": rel_path,
+                            "full_path": file_path,
+                        }
+                    )
+
                     files_table.add_row(rel_path, "Parquet file")
-                    
+
             except Exception as e:
                 error_msg = str(e)
                 if "404" in error_msg and "Not Found" in error_msg:
-                    console.print("[yellow]S3 bucket not found - may need to create bucket first[/yellow]")
-                elif "Connection refused" in error_msg or "timeout" in error_msg.lower():
-                    console.print("[yellow]MinIO server not accessible - check if MinIO is running on localhost:9000[/yellow]")
+                    console.print(
+                        "[yellow]S3 bucket not found - may need to create bucket first[/yellow]"
+                    )
+                elif (
+                    "Connection refused" in error_msg or "timeout" in error_msg.lower()
+                ):
+                    console.print(
+                        "[yellow]MinIO server not accessible - check if MinIO is running on localhost:9000[/yellow]"
+                    )
                 else:
                     console.print(f"[yellow]Could not list S3 files: {e}[/yellow]")
-                console.print("[yellow]This may be normal if bucket doesn't exist or no data written yet[/yellow]")
+                console.print(
+                    "[yellow]This may be normal if bucket doesn't exist or no data written yet[/yellow]"
+                )
                 return True
 
             console.print("\n")
@@ -1364,7 +1479,7 @@ def show_maintenance_info(conn: duckdb.DuckDBPyConnection) -> bool:
                 ).fetchdf()
             except:
                 table_info = pd.DataFrame()
-                
+
             # Show S3 storage information
             storage_info_table = Table(title=" Storage Information", box=box.ROUNDED)
             storage_info_table.add_column("Property", style="cyan")
@@ -1372,7 +1487,7 @@ def show_maintenance_info(conn: duckdb.DuckDBPyConnection) -> bool:
             storage_info_table.add_row("Storage Backend", "S3 MinIO")
             storage_info_table.add_row("Data Path", "s3://ducklake-bucket/data")
             storage_info_table.add_row("Format", "Parquet")
-            
+
             console.print("\n")
             console.print(storage_info_table)
 

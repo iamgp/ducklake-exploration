@@ -39,6 +39,7 @@ dev = [
 
 [project.scripts]
 ducklake-demo = "ducklake_demo:cli"
+ducklake-interactive = "ducklake_interactive_demo:main"
 
 [project.urls]
 Homepage = "https://github.com/yourusername/ducklake-tutorial"
