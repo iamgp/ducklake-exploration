@@ -22,6 +22,11 @@ dependencies = [
     "taskipy>=1.12.0",
     "click>=8.0.0",
     "rich>=13.0.0",
+    "ipython>=8.37.0",
+    "matplotlib>=3.10.3",
+    "seaborn>=0.13.2",
+    "ipykernel>=6.29.5",
+    "ipywidgets>=8.1.7",
 ]
 
 [project.optional-dependencies]
@@ -41,11 +46,17 @@ Repository = "https://github.com/yourusername/ducklake-tutorial"
 Documentation = "https://github.com/yourusername/ducklake-tutorial#readme"
 
 [tool.taskipy.tasks]
-# Start PostgreSQL container
+# Start PostgreSQL container (Docker)
 docker-up = "docker compose up -d"
 
-# Stop PostgreSQL container  
+# Start PostgreSQL container (Podman)
+podman-up = "podman volume create postgres_data 2>/dev/null || true && podman run -d --name ducklake-postgres --replace -e POSTGRES_DB=ducklake_catalog -e POSTGRES_USER=ducklake -e POSTGRES_PASSWORD=ducklake123 -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 -v postgres_data:/var/lib/postgresql/data -v ./init.sql:/docker-entrypoint-initdb.d/init.sql --restart unless-stopped docker.io/library/postgres:15"
+
+# Stop PostgreSQL container (Docker)
 docker-down = "docker compose down"
+
+# Stop PostgreSQL container (Podman)
+podman-down = "podman stop ducklake-postgres && podman rm ducklake-postgres"
 
 # Start marimo notebook
 notebook = "marimo edit ducklake_tutorial.py --host 0.0.0.0 --port 8080 --no-token"
@@ -53,33 +64,51 @@ notebook = "marimo edit ducklake_tutorial.py --host 0.0.0.0 --port 8080 --no-tok
 # Complete setup: start docker + marimo
 start = "task docker-up && echo 'Waiting for PostgreSQL...' && sleep 3 && task notebook"
 
+# Complete setup: start podman + marimo
+start-podman = "task podman-up && echo 'Waiting for PostgreSQL...' && sleep 3 && task notebook"
+
 # Development setup with optional dependencies
 dev-install = "uv sync --extra dev"
 
-# Check PostgreSQL status
+# Check PostgreSQL status (Docker)
 docker-status = "docker compose ps"
 
-# View PostgreSQL logs
+# Check PostgreSQL status (Podman)
+podman-status = "podman ps --filter name=ducklake-postgres"
+
+# View PostgreSQL logs (Docker)
 docker-logs = "docker compose logs postgres"
 
-# Reset everything (stop containers, remove volumes)
+# View PostgreSQL logs (Podman)
+podman-logs = "podman logs ducklake-postgres"
+
+# Reset everything (stop containers, remove volumes) - Docker
 reset = "docker compose down -v && docker compose up -d"
+
+# Reset everything (stop containers, remove volumes) - Podman
+reset-podman = "podman stop ducklake-postgres && podman rm ducklake-postgres && podman volume rm postgres_data && task podman-up"
 
 # Configure UFW firewall for marimo
 setup-firewall = "sudo ufw allow 2718/tcp"
 
-# Reset DuckLake completely (clean slate)
+# Reset DuckLake completely (clean slate) - Docker
 reset-lake = "rm -rf ./ducklake_data && docker compose exec postgres psql -U ducklake -d ducklake_catalog -c 'DROP SCHEMA IF EXISTS ducklake CASCADE; DROP SCHEMA IF EXISTS main CASCADE; DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'"
 
-# Clean reset: stop containers, remove data, restart fresh
+# Reset DuckLake completely (clean slate) - Podman
+reset-lake-podman = "rm -rf ./ducklake_data && podman exec ducklake-postgres psql -U ducklake -d ducklake_catalog -c 'DROP SCHEMA IF EXISTS ducklake CASCADE; DROP SCHEMA IF EXISTS main CASCADE; DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'"
+
+# Clean reset: stop containers, remove data, restart fresh - Docker
 clean-reset = "docker compose down -v && rm -rf ./ducklake_data && docker compose up -d"
+
+# Clean reset: stop containers, remove data, restart fresh - Podman
+clean-reset-podman = "podman stop ducklake-postgres && podman rm ducklake-postgres && podman volume rm postgres_data && rm -rf ./ducklake_data && task podman-up"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
 include = ["ducklake_demo.py", "init.sql", "docker-compose.yml"]
 
 [tool.ruff.lint]
-extend-ignore = ["E722"]
+extend-ignore = ["E722", "F401", "F403", "F405"]
 
 [tool.basedpyright]
 reportUnusedCallResult = false
@@ -89,6 +118,7 @@ reportUnknownArgumentType = false
 reportUnknownVariableType = false
 reportUnusedParameter = false
 reportUnusedVariable = false
+reportUnusedImport = false
 
 [tool.uv]
 dev-dependencies = [
