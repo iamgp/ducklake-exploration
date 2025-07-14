@@ -40,6 +40,22 @@ get_user_config() {
     print_status "DuckLake Configuration Setup"
     echo
     
+    # Get installation directory
+    read -p "Enter installation directory [./ducklake]: " INSTALL_DIR
+    INSTALL_DIR=${INSTALL_DIR:-./ducklake}
+    
+    # Create directory if it doesn't exist
+    if [ ! -d "$INSTALL_DIR" ]; then
+        mkdir -p "$INSTALL_DIR"
+        print_status "Created directory: $INSTALL_DIR"
+    fi
+    
+    # Convert to absolute path and change to it
+    INSTALL_DIR=$(realpath "$INSTALL_DIR")
+    cd "$INSTALL_DIR"
+    print_status "Using installation directory: $INSTALL_DIR"
+    echo
+    
     # Get bucket name
     read -p "Enter S3 bucket name [ducklake-bucket]: " BUCKET_NAME
     BUCKET_NAME=${BUCKET_NAME:-ducklake-bucket}
@@ -62,10 +78,11 @@ get_user_config() {
     DB_PASS=${DB_PASS:-ducklake123}
     
     # Export for use in other functions
-    export BUCKET_NAME DATA_PATH DB_NAME DB_USER DB_PASS
+    export BUCKET_NAME DATA_PATH DB_NAME DB_USER DB_PASS INSTALL_DIR
     
     echo
     print_success "Configuration saved:"
+    echo "  Installation: $INSTALL_DIR"
     echo "  Bucket: s3://$BUCKET_NAME/$DATA_PATH"
     echo "  Database: $DB_NAME"
     echo "  User: $DB_USER"
@@ -114,7 +131,7 @@ packages = ["ducklake_server"]
 
 [tool.taskipy.tasks]
 # Core service management
-start-postgres = "podman run -d --name ducklake-postgres --replace -e POSTGRES_DB=${DB_NAME} -e POSTGRES_USER=${DB_USER} -e POSTGRES_PASSWORD=${DB_PASS} -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 -v postgres_data:/var/lib/postgresql/data -v $(pwd)/init.sql:/docker-entrypoint-initdb.d/init.sql postgres:15"
+start-postgres = "podman run -d --name ducklake-postgres --replace -e POSTGRES_DB=${DB_NAME} -e POSTGRES_USER=${DB_USER} -e POSTGRES_PASSWORD=${DB_PASS} -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 -v postgres_data:/var/lib/postgresql/data -v $(pwd)/init.sql:/docker-entrypoint-initdb.d/init.sql docker.io/library/postgres:15"
 start-minio = "podman run -d --name ducklake-minio --replace -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin -p 9000:9000 -p 9001:9001 -v minio_data:/data quay.io/minio/minio:latest server /data --console-address :9001"
 create-bucket = "sleep 5 && podman exec ducklake-minio mc alias set local http://localhost:9000 minioadmin minioadmin && podman exec ducklake-minio mc mb local/${BUCKET_NAME} 2>/dev/null || true"
 start = "task start-postgres && task start-minio && task create-bucket"
@@ -136,11 +153,22 @@ EOF
     # Create init.sql
     cat > init.sql << EOF
 -- Initialize the DuckLake catalog database
+-- Create user if it doesn't exist
+DO \$\$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${DB_USER}') THEN
+        CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';
+    END IF;
+END
+\$\$;
+
+-- Connect to the target database
 \c ${DB_NAME};
 
 -- Grant necessary permissions
 GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};
 GRANT ALL ON SCHEMA public TO ${DB_USER};
+GRANT CREATE ON SCHEMA public TO ${DB_USER};
 
 -- Create extension if available
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -356,8 +384,24 @@ if ! podman info >/dev/null 2>&1; then
 fi
 print_success "Podman configuration verified"
 
-# Use current directory (where script is run)
-DUCKLAKE_DIR="$(pwd)"
+# Test image pulling permissions
+print_status "Testing container image access..."
+if ! podman pull --quiet docker.io/library/hello-world:latest >/dev/null 2>&1; then
+    print_warning "Container registry access may be limited"
+    echo "This could be due to:"
+    echo "1. Network restrictions"
+    echo "2. Registry authentication required"
+    echo "3. Corporate firewall/proxy"
+    echo ""
+    echo "Continuing anyway - images will be pulled during service start..."
+else
+    print_success "Container registry access verified"
+    # Clean up test image
+    podman rmi docker.io/library/hello-world:latest >/dev/null 2>&1 || true
+fi
+
+# Use the installation directory from config
+DUCKLAKE_DIR="$INSTALL_DIR"
 
 # Create all configuration files
 create_files
