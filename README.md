@@ -1,168 +1,192 @@
-# DuckLake Tutorial
+# DuckLake Installer & Container Manager
 
-A comprehensive tutorial for exploring DuckDB's DuckLake capabilities using PostgreSQL catalog and MinIO object storage.
+A comprehensive installer and management tool for DuckLake with PostgreSQL catalog and MinIO object storage. Single-file installer that handles everything from initial setup to ongoing container management.
 
 ## Quick Start
 
-### Automated Setup (Recommended)
+### Installation
 ```bash
-./setup.sh
+# Interactive installation
+curl -sSL https://your-server/ducklake-installer.sh | bash
+
+# Or download and run locally
+wget https://your-server/ducklake-installer.sh
+chmod +x ducklake-installer.sh
+./ducklake-installer.sh
 ```
 
-### Manual Setup
-
-#### Prerequisites
-- Python 3.10+
-- Podman container runtime
-- UV package manager
-
-#### 1. Install Dependencies
+### Container Management
 ```bash
-uv sync
+# Check status
+./ducklake-installer.sh --status
+
+# Start/stop services
+./ducklake-installer.sh --start
+./ducklake-installer.sh --stop
+
+# View logs
+./ducklake-installer.sh --logs postgres
 ```
 
-#### 2. Start Services
+## Installation Options
+
+### Interactive Mode (Default)
 ```bash
-uv run task start
+./ducklake-installer.sh
+```
+Prompts for all configuration options with sensible defaults.
+
+### Non-Interactive Mode
+```bash
+./ducklake-installer.sh --non-interactive
+```
+Uses default values, perfect for automation and CI/CD.
+
+### Configuration File
+```bash
+# Create config file
+cp ducklake.conf.example ducklake.conf
+# Edit ducklake.conf with your settings
+./ducklake-installer.sh --config ducklake.conf
 ```
 
-#### 3. Run Demo
+### Dry Run Mode
 ```bash
-uv run ducklake-demo
+./ducklake-installer.sh --dry-run
+```
+Preview all changes without executing them.
+
+## Container Management Commands
+
+### Status & Monitoring
+```bash
+# Show all DuckLake containers
+./ducklake-installer.sh --status
+
+# Show specific instance
+./ducklake-installer.sh --status prod
+
+# View real-time logs
+./ducklake-installer.sh --logs postgres
+./ducklake-installer.sh --logs minio
 ```
 
-## What's Included
+### Service Control
+```bash
+# Start all containers
+./ducklake-installer.sh --start
 
-- **ducklake_demo.py** - CLI demo script with complete tutorial
-- **ducklake_demo.ipynb** - Jupyter notebook version
-- **helpers.py** - Utility functions for setup and demos
-- **setup.sh** - Automated setup script
-- **setup.md** - Detailed setup guide
-- **pyproject.toml** - Project configuration and task definitions
+# Start specific instance
+./ducklake-installer.sh --start dev
 
-## Tutorial Phases
+# Stop all containers
+./ducklake-installer.sh --stop
 
-### Phase 1: Foundation Setup
-- PostgreSQL catalog configuration
-- MinIO object storage setup
-- DuckDB extensions installation
-- DuckLake initialization
+# Stop specific instance
+./ducklake-installer.sh --stop prod
 
-### Phase 2: Core Operations
-- Table creation and data ingestion
-- Basic queries and joins
-- ACID transaction demonstrations
+# Restart containers
+./ducklake-installer.sh --restart
+./ducklake-installer.sh --restart test
+```
 
-### Phase 3: Advanced Features
-- Time travel and snapshots
-- Schema evolution
-- Performance analysis
+### Cleanup & Maintenance
+```bash
+# Remove containers and volumes
+./ducklake-installer.sh --clean
 
-### Phase 4: Real-World Patterns
-- Data compression and storage optimization
-- Parquet file analysis
-- Maintenance operations
+# Clean specific instance
+./ducklake-installer.sh --clean dev
 
-## Key Features Demonstrated
+# Complete uninstall
+./ducklake-installer.sh --uninstall
+```
 
-✅ **Local Development** - No cloud dependencies  
-✅ **PostgreSQL Catalog** - Familiar SQL database for metadata  
-✅ **MinIO Storage** - S3-compatible object storage  
-✅ **ACID Transactions** - Full consistency guarantees  
-✅ **Time Travel** - Historical data access via snapshots  
-✅ **Schema Evolution** - Safe schema changes  
-✅ **Columnar Storage** - Efficient Parquet-based storage  
+## Configuration
+
+### Default Configuration
+```bash
+INSTALL_DIR=./ducklake
+INSTANCE_NAME=default
+BUCKET_NAME=ducklake-bucket
+DATA_PATH=data
+DB_NAME=ducklake_catalog
+DB_USER=ducklake
+DB_PASS=ducklake123
+POSTGRES_PORT=5432
+MINIO_PORT=9000
+MINIO_CONSOLE_PORT=9001
+```
+
+### Multiple Instances
+Run multiple DuckLake instances with different configurations:
+
+```bash
+# Production instance
+INSTANCE_NAME=prod POSTGRES_PORT=5432 ./ducklake-installer.sh --non-interactive
+
+# Development instance  
+INSTANCE_NAME=dev POSTGRES_PORT=5433 MINIO_PORT=9002 ./ducklake-installer.sh --non-interactive
+
+# Manage instances separately
+./ducklake-installer.sh --status prod
+./ducklake-installer.sh --restart dev
+```
+
+## Prerequisites
+
+The installer automatically handles prerequisites:
+
+- **Python 3.10+** - Auto-detects and provides installation instructions
+- **Podman** - Auto-installs on Ubuntu/Debian/RHEL/CentOS/Fedora
+- **UV Package Manager** - Auto-downloads and installs
+- **User Namespaces** - Auto-configures for rootless podman
 
 ## Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Python        │    │    DuckDB        │    │   PostgreSQL    │
-│   Demo/Notebook │◄──►│    Engine        │◄──►│    Catalog      │
-│                 │    │                  │    │                 │
+│   DuckDB        │    │    PostgreSQL    │    │      MinIO      │
+│   Client        │◄──►│    Catalog       │    │   S3 Storage    │
+│                 │    │   (Metadata)     │    │   (Data Files)  │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
-                                │
-                                ▼
-                       ┌─────────────────┐
-                       │      MinIO      │
-                       │   S3 Storage    │
-                       │ (ducklake-bucket)│
-                       └─────────────────┘
+                                │                        │
+                                └────────────────────────┘
+                                    DuckLake Extension
 ```
 
-## Available Tasks
+## Service Details
 
-All tasks are managed via taskipy in `pyproject.toml`:
+### PostgreSQL Catalog
+- **Purpose**: Stores table metadata, schemas, and transaction logs
+- **Database**: `ducklake_catalog` 
+- **Default Port**: `5432`
+- **Credentials**: `ducklake` / `ducklake123`
 
-```bash
-# Service Management
-uv run task start          # Start all services
-uv run task stop           # Stop all services
-uv run task status         # Check service status
+### MinIO Object Storage
+- **Purpose**: Stores actual data files (Parquet format)
+- **Default Ports**: `9000` (API), `9001` (Console)
+- **Credentials**: `minioadmin` / `minioadmin`
+- **Console**: http://localhost:9001
 
-# Individual Services
-uv run task start-postgres # Start PostgreSQL only
-uv run task start-minio    # Start MinIO only
-uv run task create-bucket  # Create MinIO bucket
+## Client Connection
 
-# Monitoring
-uv run task logs           # View combined logs
-uv run task logs-postgres  # PostgreSQL logs only
-uv run task logs-minio     # MinIO logs only
-
-# Data Management
-uv run task reset-data     # Reset data only
-uv run task reset          # Full reset
-uv run task clean          # Complete cleanup
-```
-
-## Service Configuration
-
-**PostgreSQL (Catalog)**
-- Database: `ducklake_catalog`
-- User: `ducklake`
-- Password: `ducklake123`
-- Port: `5432`
-
-**MinIO (Storage)**
-- User: `minioadmin`
-- Password: `minioadmin`
-- API Port: `9000`
-- Console Port: `9001`
-- Console URL: http://localhost:9001
-
-## Environment Variables
-
-Customize configuration in `.env` file:
-
-```bash
-# PostgreSQL
-POSTGRES_DB=ducklake_catalog
-POSTGRES_USER=ducklake
-POSTGRES_PASSWORD=ducklake123
-POSTGRES_PORT=5432
-
-# MinIO
-MINIO_USER=minioadmin
-MINIO_PASSWORD=minioadmin
-MINIO_PORT=9000
-MINIO_CONSOLE_PORT=9001
-```
-
-## DuckLake Configuration
-
-### Extension Installation
+### Python/DuckDB Setup
 ```python
+import duckdb
+
+# Connect to DuckDB
+conn = duckdb.connect()
+
+# Install required extensions
 conn.execute("INSTALL ducklake")
-conn.execute("INSTALL postgres")
+conn.execute("INSTALL postgres") 
 conn.execute("INSTALL httpfs")
 conn.execute("LOAD ducklake")
 conn.execute("LOAD postgres")
 conn.execute("LOAD httpfs")
-```
 
-### S3 Configuration for MinIO
-```python
+# Configure S3 connection to MinIO
 conn.execute("""
     SET s3_region='us-east-1';
     SET s3_access_key_id='minioadmin';
@@ -171,73 +195,183 @@ conn.execute("""
     SET s3_use_ssl=false;
     SET s3_url_style='path';
 """)
+
+# Connect to DuckLake
+conn.execute("""
+    ATTACH 'ducklake:postgres:dbname=ducklake_catalog
+            user=ducklake  
+            password=ducklake123
+            host=localhost
+            port=5432' AS ducklake_demo
+            (DATA_PATH 's3://ducklake-bucket/data');
+""")
+
+# Create and query tables
+conn.execute("""
+    CREATE TABLE ducklake_demo.sales (
+        id INTEGER,
+        product VARCHAR,
+        amount DECIMAL(10,2),
+        sale_date DATE
+    );
+""")
 ```
 
-### DuckLake Initialization
+### Remote Connections
+For remote server installations, replace `localhost` with your server IP:
+
 ```python
-ducklake_init_query = f"""
-ATTACH 'ducklake:postgres:dbname=ducklake_catalog
-        user=ducklake
-        password=ducklake123
-        host=localhost
-        port=5432' AS ducklake_demo
-        (DATA_PATH 's3://ducklake-bucket/data');
-"""
-conn.execute(ducklake_init_query)
+# Use server IP instead of localhost
+conn.execute("""
+    SET s3_endpoint='YOUR_SERVER_IP:9000';
+""")
+
+conn.execute("""
+    ATTACH 'ducklake:postgres:dbname=ducklake_catalog
+            user=ducklake  
+            password=ducklake123
+            host=YOUR_SERVER_IP
+            port=5432' AS ducklake_demo
+            (DATA_PATH 's3://ducklake-bucket/data');
+""")
 ```
+
+## Features
+
+### Installation Features
+- ✅ **Single-file installer** - No dependencies to download
+- ✅ **Auto-detection** - Detects OS and installs requirements
+- ✅ **Validation** - Validates all inputs and configurations
+- ✅ **Rollback** - Automatic cleanup on installation failure
+- ✅ **Logging** - Comprehensive logs for debugging
+
+### Container Management
+- ✅ **Multi-instance** - Manage multiple DuckLake deployments
+- ✅ **Status monitoring** - Detailed container and instance status
+- ✅ **Log streaming** - Real-time log viewing with Ctrl+C exit
+- ✅ **Bulk operations** - Start/stop/restart all or filtered containers
+- ✅ **Clean removal** - Complete cleanup of containers and volumes
+
+### Robustness Features
+- ✅ **Retry logic** - Automatic retries for transient failures
+- ✅ **Timeout handling** - Network operations with configurable timeouts
+- ✅ **Error recovery** - Detailed error messages with fix suggestions
+- ✅ **Health checks** - Verifies services are actually ready
+- ✅ **Port conflict detection** - Prevents installation conflicts
 
 ## Troubleshooting
+
+### Installation Issues
+```bash
+# Check installation log
+cat ./ducklake/ducklake-install.log
+
+# Validate configuration
+./ducklake-installer.sh --dry-run --config ducklake.conf
+
+# Test podman setup
+podman info
+```
 
 ### Service Issues
 ```bash
 # Check container status
-uv run task status
+./ducklake-installer.sh --status
+
+# View service logs
+./ducklake-installer.sh --logs postgres
+./ducklake-installer.sh --logs minio
 
 # Restart services
-uv run task stop && uv run task start
-
-# View logs
-uv run task logs
+./ducklake-installer.sh --restart
 ```
 
 ### Port Conflicts
-Set different ports in `.env` file:
 ```bash
-POSTGRES_PORT=5433
-MINIO_PORT=9001
-MINIO_CONSOLE_PORT=9002
+# Check what's using ports
+ss -tuln | grep :5432
+ss -tuln | grep :9000
+
+# Use different ports
+POSTGRES_PORT=5433 MINIO_PORT=9002 ./ducklake-installer.sh --non-interactive
 ```
 
 ### Complete Reset
 ```bash
-uv run task clean  # Stop services, remove volumes
-uv run task start  # Restart everything
+# Clean everything and reinstall
+./ducklake-installer.sh --clean
+./ducklake-installer.sh --non-interactive
 ```
 
-## Demo Usage
+### Network Issues
+```bash
+# Test registry access
+curl -I https://registry-1.docker.io
+
+# Test with proxy
+HTTP_PROXY=http://proxy:8080 ./ducklake-installer.sh
+
+# Manual container pull
+podman pull docker.io/library/postgres:15
+```
+
+## Advanced Usage
+
+### CI/CD Integration
+```bash
+# Automated deployment
+curl -sSL https://your-server/ducklake-installer.sh | bash -s -- --non-interactive
+
+# With custom config
+echo "INSTANCE_NAME=ci-test" > ci.conf
+echo "POSTGRES_PORT=5433" >> ci.conf
+./ducklake-installer.sh --config ci.conf --non-interactive
+```
+
+### Docker Compose Alternative
+The installer creates equivalent functionality to this docker-compose.yml:
+
+```yaml
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ducklake_catalog
+      POSTGRES_USER: ducklake
+      POSTGRES_PASSWORD: ducklake123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+```
+
+### Production Considerations
+- Change default passwords in configuration
+- Use proper SSL certificates for remote access
+- Configure firewall rules for ports
+- Set up regular backups of PostgreSQL catalog
+- Monitor container resource usage
+- Use dedicated storage volumes for production data
+
+## Help & Support
 
 ```bash
-# Run complete demo
-uv run ducklake-demo
+# Show all available options
+./ducklake-installer.sh --help
 
-# Run without data reset
-uv run ducklake-demo --no-reset
-
-# Manual reset only
-uv run ducklake-demo reset
-
-# Direct Python execution
-python ducklake_demo.py
+# Get version information
+./ducklake-installer.sh --status
 ```
 
-## Resources
-
-- [DuckLake Documentation](https://duckdb.org/docs/stable/core_extensions/ducklake.html)
-- [DuckDB SQL Reference](https://duckdb.org/docs/stable/sql/introduction.html)
-- [MinIO Documentation](https://docs.min.io/)
-- [UV Documentation](https://docs.astral.sh/uv/)
-- [Taskipy Documentation](https://github.com/taskipy/taskipy)
-
-## License
-
-MIT License - see LICENSE file for details.
