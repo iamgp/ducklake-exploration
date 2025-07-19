@@ -1,0 +1,2189 @@
+#!/bin/bash
+
+# DuckLake Complete Installer -  Version
+# Single-file installer for DuckLake with PostgreSQL catalog and MinIO storage
+# 
+# Run with: curl -sSL https://your-server/ducklake-installer.sh | bash
+# 
+# Usage: ./ducklake-gum [OPTIONS]
+# Options:
+#   --non-interactive    Run without prompts using defaults or config file
+#   --dry-run           Preview changes without executing them
+#   --config FILE       Use configuration file instead of prompts
+#   --uninstall         Remove DuckLake installation
+#   --help              Show this help message
+
+set -e  # Exit on any error
+
+# Script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source the shared YADL style library
+source "$SCRIPT_DIR/../yadl-style.sh"
+
+# Override title to show DuckLake with yellow background
+title() {
+    title_with_color "DuckLake" "$DUCKLAKE_YELLOW"
+}
+
+# Global flags
+NON_INTERACTIVE=false
+DRY_RUN=false
+CONFIG_FILE=""
+UNINSTALL=false
+COMMAND=""
+INSTANCE_FILTER=""
+LOG_SERVICE=""
+
+# Error handling and logging
+LOG_FILE=""
+TEMP_FILES=:
+
+# Network timeouts (in seconds)
+CURL_TIMEOUT=30
+CURL_CONNECT_TIMEOUT=10
+
+# Check if gum is available
+check_gum() {
+    if ! command -v gum >/dev/null 2>&1; then
+        echo "✕ Gum is required for this DuckLake."
+        echo "• Please install gum first or use the original script: ./ducklake.sh"
+        exit 1
+    fi
+}
+
+check_gum
+
+# Map print functions to YADL style library
+print_status() {
+    info "$1"
+    log_message "INFO" "$1"
+}
+
+print_success() {
+    success "$1"
+    log_message "SUCCESS" "$1"
+}
+
+print_warning() {
+    warning "$1"
+    log_message "WARNING" "$1"
+}
+
+print_error() {
+    error "$1"
+    log_message "ERROR" "$1"
+}
+
+print_header() {
+    local title_text="$1"
+    local subtitle="${2:-}"
+    
+    separator
+    section "$title_text"
+    if [ -n "$subtitle" ]; then
+        muted "$subtitle"
+    fi
+    separator
+}
+
+print_title() {
+    section "$1"
+}
+
+print_step() {
+    info "$1"
+}
+
+# Logging function
+log_message() {
+    local level="$1"
+    local msg="$2"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    if [ -n "$LOG_FILE" ]; then
+        echo "[$timestamp] [$level] $msg" >> "$LOG_FILE"
+    fi
+}
+
+# Setup logging
+setup_logging() {
+    if [ "$DRY_RUN" = false ]; then
+        LOG_FILE="${INSTALL_DIR:-./ducklake}/ducklake-install.log"
+        mkdir -p "$(dirname "$LOG_FILE")"
+        echo "DuckLake Installation Log - $(date)" > "$LOG_FILE"
+        log_message "INFO" "Installation started with PID: $$"
+        log_message "INFO" "Command line: $0 $*"
+    fi
+}
+
+# Cleanup function for exit
+cleanup_on_exit() {
+    local exit_code=$?
+    
+    if [ $exit_code -ne 0 ]; then
+        print_error "Installation failed with exit code: $exit_code"
+    fi
+    
+    # Clean up temporary files
+    for temp_file in "${TEMP_FILES[@]}"; do
+        rm -f "$temp_file" 2>/dev/null || true
+    done
+    
+    if [ -n "$LOG_FILE" ] && [ $exit_code -ne 0 ]; then
+        echo ""
+        print_error "Installation failed. Check log file: $LOG_FILE"
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 240 --margin "1 0" "Last 10 log entries:"
+        else
+            echo "Last 10 log entries:"
+        fi
+        tail -10 "$LOG_FILE" 2>/dev/null || true
+    fi
+}
+
+# Set up exit trap
+trap cleanup_on_exit EXIT
+
+
+# Retry function for transient failures
+retry_command() {
+    local max_attempts="$1"
+    local delay="$2"
+    local description="$3"
+    shift 3
+    local cmd="$*"
+    
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if [ $attempt -gt 1 ]; then
+            print_status "Retry attempt $attempt/$max_attempts: $description"
+            sleep $delay
+        fi
+        
+        if eval "$cmd"; then
+            return 0
+        fi
+        
+        attempt=$((attempt + 1))
+    done
+    
+    print_error "Failed after $max_attempts attempts: $description"
+    return 1
+}
+
+# Container management functions
+find_ducklake_containers() {
+    local instance_filter="$1"
+    local filter_pattern="ducklake-"
+    
+    if [ -n "$instance_filter" ]; then
+        filter_pattern="ducklake-.*-${instance_filter}"
+    fi
+    
+    podman ps -a --filter "name=${filter_pattern}" --format "{{.Names}}" 2>/dev/null | sort
+}
+
+find_ducklake_instances() {
+    # Find all unique instance names from container names
+    podman ps -a --filter "name=ducklake-" --format "{{.Names}}" 2>/dev/null | \
+        sed -n 's/ducklake-.*-\(.*\)/\1/p' | sort -u
+}
+
+container_status() {
+    local instance_filter="$1"
+    
+    print_title "DuckLake Container Status"
+    echo
+    
+    local containers
+    containers=$(find_ducklake_containers "$instance_filter")
+    
+    if [ -z "$containers" ]; then
+        if [ -n "$instance_filter" ]; then
+            print_warning "No DuckLake containers found for instance: $instance_filter"
+        else
+            print_warning "No DuckLake containers found"
+        fi
+        echo
+        
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 33 --bold "Available instances:"
+        else
+            echo "Available instances:"
+        fi
+        
+        local instances
+        instances=$(find_ducklake_instances)
+        if [ -n "$instances" ]; then
+            echo "$instances" | while read -r instance; do
+                if [ -n "$instance" ]; then
+                    print_step "$instance"
+                fi
+            done
+        else
+            print_step "None"
+        fi
+        return 0
+    fi
+    
+    # Show detailed status
+    if command -v gum >/dev/null 2>&1; then
+        gum style --foreground 33 --bold "Container Status:"
+    else
+        echo "Container Status:"
+    fi
+    
+    if command -v gum >/dev/null 2>&1; then
+        # Create table header
+        printf "%-30s %-15s %-20s %s\n" "NAME" "STATUS" "PORTS" "IMAGE" | \
+            gum style --foreground 240 --bold
+    else
+        printf "%-30s %-15s %-20s %s\n" "NAME" "STATUS" "PORTS" "IMAGE"
+    fi
+    
+    print_separator
+    
+    echo "$containers" | while read -r container; do
+        if [ -n "$container" ]; then
+            local status ports image
+            status=$(podman ps -a --filter "name=$container" --format "{{.Status}}" 2>/dev/null)
+            ports=$(podman ps -a --filter "name=$container" --format "{{.Ports}}" 2>/dev/null)
+            image=$(podman ps -a --filter "name=$container" --format "{{.Image}}" 2>/dev/null | sed 's/.*\///')
+            
+            # Color coding for status
+            if command -v gum >/dev/null 2>&1 && echo "$status" | grep -q "Up"; then
+                printf "%-30s " "$container"
+                gum style --foreground 46 "$status"
+                printf " %-20s %s\n" "$ports" "$image"
+            else
+                printf "%-30s %-15s %-20s %s\n" "$container" "$status" "$ports" "$image"
+            fi
+        fi
+    done
+    
+    echo
+    
+    # Show summary by instance
+    local instances
+    instances=$(find_ducklake_instances)
+    if [ -n "$instances" ]; then
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 33 --bold "Instance Summary:"
+        else
+            echo "Instance Summary:"
+        fi
+        
+        echo "$instances" | while read -r instance; do
+            if [ -n "$instance" ]; then
+                local running stopped
+                running=$(podman ps --filter "name=ducklake-.*-${instance}" --format "{{.Names}}" 2>/dev/null | wc -l)
+                stopped=$(podman ps -a --filter "name=ducklake-.*-${instance}" --format "{{.Names}}" 2>/dev/null | wc -l)
+                stopped=$((stopped - running))
+                
+                if command -v gum >/dev/null 2>&1; then
+                    printf "  "
+                    gum style --foreground 255 "$(printf "%-15s" "$instance")"
+                    printf " "
+                    gum style --foreground 46 "Running: $running"
+                    printf ", "
+                    gum style --foreground 196 "Stopped: $stopped"
+                    echo
+                else
+                    printf "  %-15s Running: %d, Stopped: %d\n" "$instance" "$running" "$stopped"
+                fi
+            fi
+        done
+    fi
+}
+
+container_start() {
+    local instance_filter="$1"
+    
+    if [ -n "$instance_filter" ]; then
+        print_status "Starting DuckLake containers for instance: $instance_filter"
+    else
+        print_status "Starting all DuckLake containers"
+    fi
+    
+    local containers
+    containers=$(find_ducklake_containers "$instance_filter")
+    
+    if [ -z "$containers" ]; then
+        if [ -n "$instance_filter" ]; then
+            print_error "No DuckLake containers found for instance: $instance_filter"
+        else
+            print_error "No DuckLake containers found"
+            print_step "Run the installer first to create containers"
+        fi
+        return 1
+    fi
+    
+    local started=0
+    local failed=0
+    
+    echo "$containers" | while read -r container; do
+        if [ -n "$container" ]; then
+            if command -v gum >/dev/null 2>&1; then
+                printf "%s" "$(gum style --foreground 255 "Starting $container... ")"
+            else
+                echo -n "Starting $container... "
+            fi
+            
+            if podman start "$container" >/dev/null 2>&1; then
+                if command -v gum >/dev/null 2>&1; then
+                    gum style --foreground 46 "✓"
+                else
+                    echo "✓"
+                fi
+                started=$((started + 1))
+            else
+                if command -v gum >/dev/null 2>&1; then
+                    gum style --foreground 196 "✗"
+                else
+                    echo "✗"
+                fi
+                failed=$((failed + 1))
+            fi
+        fi
+    done
+    
+    echo
+    if [ $failed -eq 0 ]; then
+        print_success "All containers started successfully"
+    else
+        print_warning "Some containers failed to start. Check logs with --logs"
+    fi
+    
+    # Wait a moment and show status
+    sleep 2
+    container_status "$instance_filter"
+}
+
+container_stop() {
+    local instance_filter="$1"
+    
+    if [ -n "$instance_filter" ]; then
+        print_status "Stopping DuckLake containers for instance: $instance_filter"
+    else
+        print_status "Stopping all DuckLake containers"
+    fi
+    
+    local containers
+    containers=$(find_ducklake_containers "$instance_filter")
+    
+    if [ -z "$containers" ]; then
+        if [ -n "$instance_filter" ]; then
+            print_warning "No DuckLake containers found for instance: $instance_filter"
+        else
+            print_warning "No DuckLake containers found"
+        fi
+        return 0
+    fi
+    
+    local stopped=0
+    local failed=0
+    
+    echo "$containers" | while read -r container; do
+        if [ -n "$container" ]; then
+            if command -v gum >/dev/null 2>&1; then
+                printf "%s" "$(gum style --foreground 255 "Stopping $container... ")"
+            else
+                echo -n "Stopping $container... "
+            fi
+            
+            if podman stop "$container" >/dev/null 2>&1; then
+                if command -v gum >/dev/null 2>&1; then
+                    gum style --foreground 46 "✓"
+                else
+                    echo "✓"
+                fi
+                stopped=$((stopped + 1))
+            else
+                if command -v gum >/dev/null 2>&1; then
+                    gum style --foreground 196 "✗"
+                else
+                    echo "✗"
+                fi
+                failed=$((failed + 1))
+            fi
+        fi
+    done
+    
+    echo
+    if [ $failed -eq 0 ]; then
+        print_success "All containers stopped successfully"
+    else
+        print_warning "Some containers failed to stop"
+    fi
+}
+
+container_restart() {
+    local instance_filter="$1"
+    
+    print_status "Restarting DuckLake containers"
+    container_stop "$instance_filter"
+    sleep 2
+    container_start "$instance_filter"
+}
+
+container_logs() {
+    local service="$1"
+    local instance_filter="$2"
+    
+    case "$service" in
+        postgres|postgresql)
+            local container_pattern="ducklake-postgres"
+            ;;
+        minio)
+            local container_pattern="ducklake-minio"
+            ;;
+        *)
+            print_error "Unknown service: $service"
+            if command -v gum >/dev/null 2>&1; then
+                gum style --foreground 33 "Available services: postgres, minio"
+            else
+                echo "Available services: postgres, minio"
+            fi
+            return 1
+            ;;
+    esac
+    
+    if [ -n "$instance_filter" ]; then
+        container_pattern="${container_pattern}-${instance_filter}"
+    fi
+    
+    local containers
+    containers=$(podman ps -a --filter "name=${container_pattern}" --format "{{.Names}}" 2>/dev/null)
+    
+    if [ -z "$containers" ]; then
+        print_error "No $service containers found"
+        if [ -n "$instance_filter" ]; then
+            print_step "Instance filter: $instance_filter"
+        fi
+        return 1
+    fi
+    
+    local container_count
+    container_count=$(echo "$containers" | wc -l)
+    
+    if [ "$container_count" -eq 1 ]; then
+        local container
+        container=$(echo "$containers" | head -1)
+        print_status "Showing logs for: $container"
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 240 "Press Ctrl+C to exit"
+        else
+            echo "Press Ctrl+C to exit"
+        fi
+        echo
+        podman logs -f "$container"
+    else
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 33 --bold "Multiple $service containers found:"
+        else
+            echo "Multiple $service containers found:"
+        fi
+        
+        if command -v gum >/dev/null 2>&1; then
+            # Use gum choose for container selection
+            local selected_container
+            selected_container=$(echo "$containers" | gum choose --header "Select container to view logs:")
+            
+            if [ -n "$selected_container" ]; then
+                print_status "Showing logs for: $selected_container"
+                gum style --foreground 240 "Press Ctrl+C to exit"
+                echo
+                podman logs -f "$selected_container"
+            else
+                print_error "No container selected"
+                return 1
+            fi
+        else
+            echo "$containers" | nl
+            echo
+            read -p "Select container number [1]: " selection
+            selection=${selection:-1}
+            
+            local container
+            container=$(echo "$containers" | sed -n "${selection}p")
+            
+            if [ -n "$container" ]; then
+                print_status "Showing logs for: $container"
+                echo "Press Ctrl+C to exit"
+                echo
+                podman logs -f "$container"
+            else
+                print_error "Invalid selection"
+                return 1
+            fi
+        fi
+    fi
+}
+
+container_clean() {
+    local instance_filter="$1"
+    
+    if [ -n "$instance_filter" ]; then
+        print_status "Cleaning DuckLake containers and volumes for instance: $instance_filter"
+    else
+        print_status "Cleaning all DuckLake containers and volumes"
+    fi
+    
+    # Confirmation prompt
+    if [ "$NON_INTERACTIVE" = false ] && command -v gum >/dev/null 2>&1; then
+        if ! gum confirm "This will permanently delete all containers and data. Continue?"; then
+            print_status "Operation cancelled"
+            return 0
+        fi
+    elif [ "$NON_INTERACTIVE" = false ]; then
+        read -p "This will permanently delete all containers and data. Continue? [y/N]: " confirm
+        if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+            print_status "Operation cancelled"
+            return 0
+        fi
+    fi
+    
+    # Stop containers first
+    container_stop "$instance_filter"
+    
+    # Remove containers
+    local containers
+    containers=$(find_ducklake_containers "$instance_filter")
+    
+    if [ -n "$containers" ]; then
+        echo
+        print_status "Removing containers..."
+        echo "$containers" | while read -r container; do
+            if [ -n "$container" ]; then
+                if command -v gum >/dev/null 2>&1; then
+                    printf "%s" "$(gum style --foreground 255 "Removing $container... ")"
+                else
+                    echo -n "Removing $container... "
+                fi
+                
+                if podman rm "$container" >/dev/null 2>&1; then
+                    if command -v gum >/dev/null 2>&1; then
+                        gum style --foreground 46 "✓"
+                    else
+                        echo "✓"
+                    fi
+                else
+                    if command -v gum >/dev/null 2>&1; then
+                        gum style --foreground 196 "✗"
+                    else
+                        echo "✗"
+                    fi
+                fi
+            fi
+        done
+    fi
+    
+    # Remove volumes
+    echo
+    print_status "Removing volumes..."
+    local volume_pattern="*_data"
+    if [ -n "$instance_filter" ]; then
+        volume_pattern="*_data_${instance_filter}"
+    fi
+    
+    local volumes
+    volumes=$(podman volume ls --format "{{.Name}}" | grep -E "${volume_pattern}" 2>/dev/null || true)
+    
+    if [ -n "$volumes" ]; then
+        echo "$volumes" | while read -r volume; do
+            if [ -n "$volume" ]; then
+                if command -v gum >/dev/null 2>&1; then
+                    printf "%s" "$(gum style --foreground 255 "Removing volume $volume... ")"
+                else
+                    echo -n "Removing volume $volume... "
+                fi
+                
+                if podman volume rm "$volume" >/dev/null 2>&1; then
+                    if command -v gum >/dev/null 2>&1; then
+                        gum style --foreground 46 "✓"
+                    else
+                        echo "✓"
+                    fi
+                else
+                    if command -v gum >/dev/null 2>&1; then
+                        gum style --foreground 196 "✗"
+                    else
+                        echo "✗"
+                    fi
+                fi
+            fi
+        done
+    else
+        print_step "No volumes found to remove"
+    fi
+    
+    echo
+    print_success "Cleanup completed"
+}
+
+# Show help message
+show_help() {
+    if command -v gum >/dev/null 2>&1; then
+        print_title "DuckLake Complete Installer & Container Manager"
+        echo
+        
+        gum style --foreground 33 --bold "USAGE:"
+        print_step "$0 [OPTIONS] [COMMAND]"
+        echo
+        
+        gum style --foreground 33 --bold "INSTALLATION OPTIONS:"
+        print_step "--non-interactive    Run without prompts using defaults or config file"
+        print_step "--dry-run           Preview changes without executing them"
+        print_step "--config FILE       Use configuration file instead of prompts"
+        print_step "--uninstall         Remove DuckLake installation"
+        print_step "--help              Show this help message"
+        echo
+        
+        gum style --foreground 33 --bold "CONTAINER MANAGEMENT COMMANDS:"
+        print_step "--start [INSTANCE]   Start DuckLake containers"
+        print_step "--stop [INSTANCE]    Stop DuckLake containers"
+        print_step "--restart [INSTANCE] Restart DuckLake containers"
+        print_step "--status [INSTANCE]  Show container status"
+        print_step "--logs SERVICE       Show logs for service (postgres|minio)"
+        print_step "--clean [INSTANCE]   Stop containers and remove volumes"
+        echo
+        
+        gum style --foreground 33 --bold "EXAMPLES:"
+        print_step "# Interactive installation"
+        gum style --foreground 240 "  $0"
+        print_step "# Non-interactive with defaults"
+        gum style --foreground 240 "  $0 --non-interactive"
+        print_step "# Use configuration file"
+        gum style --foreground 240 "  $0 --config ducklake.conf"
+        print_step "# Container management"
+        gum style --foreground 240 "  $0 --status                    # Show all containers"
+        gum style --foreground 240 "  $0 --start prod                # Start 'prod' instance"
+        gum style --foreground 240 "  $0 --logs postgres             # Show PostgreSQL logs"
+        echo
+        
+        gum style --foreground 33 --bold "CONFIGURATION FILE FORMAT:"
+        gum style --foreground 240 --margin "0 2" \
+"INSTALL_DIR=./ducklake
+INSTANCE_NAME=default
+BUCKET_NAME=ducklake-bucket
+DATA_PATH=data
+DB_NAME=ducklake_catalog
+DB_USER=ducklake
+DB_PASS=ducklake123
+POSTGRES_PORT=5432
+MINIO_PORT=9000
+MINIO_CONSOLE_PORT=9001"
+    else
+        cat << EOF
+DuckLake Complete Installer & Container Manager
+
+USAGE:
+    $0 [OPTIONS] [COMMAND]
+
+INSTALLATION OPTIONS:
+    --non-interactive    Run without prompts using defaults or config file
+    --dry-run           Preview changes without executing them
+    --config FILE       Use configuration file instead of prompts
+    --uninstall         Remove DuckLake installation
+    --help              Show this help message
+
+CONTAINER MANAGEMENT COMMANDS:
+    --start [INSTANCE]   Start DuckLake containers
+    --stop [INSTANCE]    Stop DuckLake containers
+    --restart [INSTANCE] Restart DuckLake containers
+    --status [INSTANCE]  Show container status
+    --logs SERVICE       Show logs for service (postgres|minio)
+    --clean [INSTANCE]   Stop containers and remove volumes
+
+EXAMPLES:
+    # Interactive installation
+    $0
+
+    # Non-interactive with defaults
+    $0 --non-interactive
+
+    # Use configuration file
+    $0 --config ducklake.conf
+
+    # Preview installation
+    $0 --dry-run
+
+    # Remove installation
+    $0 --uninstall
+
+    # Container management
+    $0 --status                    # Show all DuckLake containers
+    $0 --status default            # Show containers for 'default' instance
+    $0 --start                     # Start all DuckLake containers
+    $0 --start prod                # Start containers for 'prod' instance
+    $0 --stop default              # Stop containers for 'default' instance
+    $0 --restart                   # Restart all DuckLake containers
+    $0 --logs postgres             # Show PostgreSQL logs
+    $0 --logs minio                # Show MinIO logs
+    $0 --clean                     # Clean up all containers and volumes
+
+CONFIGURATION FILE FORMAT:
+    INSTALL_DIR=./ducklake
+    INSTANCE_NAME=default
+    BUCKET_NAME=ducklake-bucket
+    DATA_PATH=data
+    DB_NAME=ducklake_catalog
+    DB_USER=ducklake
+    DB_PASS=ducklake123
+    POSTGRES_PORT=5432
+    MINIO_PORT=9000
+    MINIO_CONSOLE_PORT=9001
+
+EOF
+    fi
+}
+
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --non-interactive)
+                NON_INTERACTIVE=true
+                shift
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            --config)
+                CONFIG_FILE="$2"
+                shift 2
+                ;;
+            --uninstall)
+                UNINSTALL=true
+                shift
+                ;;
+            --start)
+                COMMAND="start"
+                INSTANCE_FILTER="$2"
+                if [[ "$2" =~ ^-- ]] || [[ -z "$2" ]]; then
+                    shift
+                else
+                    shift 2
+                fi
+                ;;
+            --stop)
+                COMMAND="stop"
+                INSTANCE_FILTER="$2"
+                if [[ "$2" =~ ^-- ]] || [[ -z "$2" ]]; then
+                    shift
+                else
+                    shift 2
+                fi
+                ;;
+            --restart)
+                COMMAND="restart"
+                INSTANCE_FILTER="$2"
+                if [[ "$2" =~ ^-- ]] || [[ -z "$2" ]]; then
+                    shift
+                else
+                    shift 2
+                fi
+                ;;
+            --status)
+                COMMAND="status"
+                INSTANCE_FILTER="$2"
+                if [[ "$2" =~ ^-- ]] || [[ -z "$2" ]]; then
+                    shift
+                else
+                    shift 2
+                fi
+                ;;
+            --logs)
+                COMMAND="logs"
+                LOG_SERVICE="$2"
+                if [[ -z "$2" ]] || [[ "$2" =~ ^-- ]]; then
+                    print_error "--logs requires a service name (postgres|minio)"
+                    exit 1
+                fi
+                shift 2
+                ;;
+            --clean)
+                COMMAND="clean"
+                INSTANCE_FILTER="$2"
+                if [[ "$2" =~ ^-- ]] || [[ -z "$2" ]]; then
+                    shift
+                else
+                    shift 2
+                fi
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Execute command with dry-run support
+execute_cmd() {
+    local cmd="$1"
+    local description="$2"
+    
+    if [ "$DRY_RUN" = true ]; then
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 240 --bold "[DRY RUN] Would execute: $description"
+            gum style --foreground 240 "  Command: $cmd"
+        else
+            print_status "[DRY RUN] Would execute: $description"
+            echo "  Command: $cmd"
+        fi
+        return 0
+    else
+        if [ -n "$description" ]; then
+            print_status "$description"
+        fi
+        eval "$cmd"
+    fi
+}
+
+# Progress indicator for long operations
+show_progress() {
+    local pid=$1
+    local message="$2"
+    local delay=0.5
+    local spinstr='|/-\'
+    
+    if [ "$DRY_RUN" = true ]; then
+        return 0
+    fi
+    
+    if command -v gum >/dev/null 2>&1; then
+        gum spin --spinner dot --title "$message" -- bash -c "while kill -0 $pid 2>/dev/null; do sleep 0.1; done"
+    else
+        echo -n "$message "
+        while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
+            local temp=${spinstr#?}
+            printf " [%c]  " "$spinstr"
+            local spinstr=$temp${spinstr%"$temp"}
+            sleep $delay
+            printf "\b\b\b\b\b\b"
+        done
+        printf "    \b\b\b\b"
+        echo ""
+    fi
+}
+
+# Check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Validation functions
+validate_port() {
+    local port="$1"
+    local name="$2"
+    
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        print_error "Invalid $name port: $port (must be 1-65535)"
+        return 1
+    fi
+    
+    # Check if port is already in use
+    if command_exists ss; then
+        if ss -tuln | grep -q ":$port "; then
+            print_warning "$name port $port is already in use"
+            return 1
+        fi
+    elif command_exists netstat; then
+        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+            print_warning "$name port $port is already in use"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+validate_path() {
+    local path="$1"
+    local name="$2"
+    
+    # Check for invalid characters
+    if [[ "$path" =~ [[:cntrl:]] ]]; then
+        print_error "Invalid $name path: contains control characters"
+        return 1
+    fi
+    
+    # Check if parent directory exists or can be created
+    local parent_dir=$(dirname "$path")
+    if [ ! -d "$parent_dir" ]; then
+        if ! mkdir -p "$parent_dir" 2>/dev/null; then
+            print_error "Cannot create parent directory for $name: $parent_dir"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+validate_name() {
+    local name="$1"
+    local field="$2"
+    
+    # Check for valid identifier (alphanumeric, underscore, hyphen)
+    if ! [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        print_error "Invalid $field: $name (only alphanumeric, underscore, and hyphen allowed)"
+        return 1
+    fi
+    
+    return 0
+}
+
+validate_config() {
+    local errors=0
+    
+    print_status "Validating configuration..."
+    
+    # Validate paths
+    if ! validate_path "$INSTALL_DIR" "installation directory"; then
+        errors=$((errors + 1))
+    fi
+    
+    # Validate names
+    if ! validate_name "$INSTANCE_NAME" "instance name"; then
+        errors=$((errors + 1))
+    fi
+    
+    if ! validate_name "$BUCKET_NAME" "bucket name"; then
+        errors=$((errors + 1))
+    fi
+    
+    if ! validate_name "$DB_NAME" "database name"; then
+        errors=$((errors + 1))
+    fi
+    
+    if ! validate_name "$DB_USER" "database user"; then
+        errors=$((errors + 1))
+    fi
+    
+    # Validate ports
+    if ! validate_port "$POSTGRES_PORT" "PostgreSQL"; then
+        errors=$((errors + 1))
+    fi
+    
+    if ! validate_port "$MINIO_PORT" "MinIO"; then
+        errors=$((errors + 1))
+    fi
+    
+    if ! validate_port "$MINIO_CONSOLE_PORT" "MinIO Console"; then
+        errors=$((errors + 1))
+    fi
+    
+    # Check for port conflicts between services
+    if [ "$POSTGRES_PORT" = "$MINIO_PORT" ] || [ "$POSTGRES_PORT" = "$MINIO_CONSOLE_PORT" ] || [ "$MINIO_PORT" = "$MINIO_CONSOLE_PORT" ]; then
+        print_error "Port conflict: PostgreSQL ($POSTGRES_PORT), MinIO ($MINIO_PORT), and MinIO Console ($MINIO_CONSOLE_PORT) must use different ports"
+        errors=$((errors + 1))
+    fi
+    
+    # Validate password strength (basic check)
+    if [ ${#DB_PASS} -lt 8 ]; then
+        print_warning "Database password is less than 8 characters (current: ${#DB_PASS})"
+        if [ "$NON_INTERACTIVE" = false ]; then
+            if command -v gum >/dev/null 2>&1; then
+                if ! gum confirm "Continue anyway?"; then
+                    errors=$((errors + 1))
+                fi
+            else
+                read -p "Continue anyway? [y/N]: " continue_weak_pass
+                if [ "$continue_weak_pass" != "y" ] && [ "$continue_weak_pass" != "Y" ]; then
+                    errors=$((errors + 1))
+                fi
+            fi
+        fi
+    fi
+    
+    if [ $errors -gt 0 ]; then
+        print_error "Configuration validation failed with $errors error(s)"
+        return 1
+    fi
+    
+    print_success "Configuration validation passed"
+    return 0
+}
+
+# Load configuration from file
+load_config() {
+    local config_file="$1"
+    
+    if [ ! -f "$config_file" ]; then
+        print_error "Configuration file not found: $config_file"
+        print_error "Create one using the example: cp ducklake.conf.example ducklake.conf"
+        exit 1
+    fi
+    
+    print_status "Loading configuration from: $config_file"
+    
+    # Source the config file safely
+    while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ $key =~ ^[[:space:]]*# ]] && continue
+        [[ -z $key ]] && continue
+        
+        # Remove quotes from value
+        value=$(echo "$value" | sed 's/^["'\'']//' | sed 's/["'\'']$//')
+        
+        case $key in
+            INSTALL_DIR|INSTANCE_NAME|BUCKET_NAME|DATA_PATH|DB_NAME|DB_USER|DB_PASS|POSTGRES_PORT|MINIO_PORT|MINIO_CONSOLE_PORT)
+                export "$key=$value"
+                ;;
+        esac
+    done < "$config_file"
+}
+
+# Get user configuration
+get_user_config() {
+    # If config file specified, load it
+    if [ -n "$CONFIG_FILE" ]; then
+        load_config "$CONFIG_FILE"
+        print_success "Configuration loaded from file"
+        return 0
+    fi
+    
+    # Set defaults for non-interactive mode
+    if [ "$NON_INTERACTIVE" = true ]; then
+        INSTALL_DIR=${INSTALL_DIR:-./ducklake}
+        INSTANCE_NAME=${INSTANCE_NAME:-default}
+        BUCKET_NAME=${BUCKET_NAME:-ducklake-bucket}
+        DATA_PATH=${DATA_PATH:-data}
+        DB_NAME=${DB_NAME:-ducklake_catalog}
+        DB_USER=${DB_USER:-ducklake}
+        DB_PASS=${DB_PASS:-ducklake123}
+        POSTGRES_PORT=${POSTGRES_PORT:-5432}
+        MINIO_PORT=${MINIO_PORT:-9000}
+        MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT:-9001}
+        
+        print_status "Using default configuration (non-interactive mode)"
+    else
+        print_title "DuckLake Configuration Setup"
+        echo
+        
+        if command -v gum >/dev/null 2>&1; then
+            # Use gum for enhanced input
+            print_step "Installation directory"
+            INSTALL_DIR=$(gum input --placeholder "./ducklake" --value "./ducklake")
+            
+            print_step "Instance name"
+            INSTANCE_NAME=$(gum input --placeholder "default" --value "default")
+            
+            print_step "S3 bucket name"
+            BUCKET_NAME=$(gum input --placeholder "ducklake-bucket" --value "ducklake-bucket")
+            
+            print_step "Data path within bucket"
+            DATA_PATH=$(gum input --placeholder "data" --value "data")
+            
+            print_step "Catalog database name"
+            DB_NAME=$(gum input --placeholder "ducklake_catalog" --value "ducklake_catalog")
+            
+            print_step "Database username"
+            DB_USER=$(gum input --placeholder "ducklake" --value "ducklake")
+            
+            print_step "Database password"
+            DB_PASS=$(gum input --password --placeholder "ducklake123")
+            DB_PASS=${DB_PASS:-ducklake123}
+            
+            print_step "PostgreSQL port"
+            POSTGRES_PORT=$(gum input --placeholder "5432" --value "5432")
+            
+            print_step "MinIO port"
+            MINIO_PORT=$(gum input --placeholder "9000" --value "9000")
+            
+            print_step "MinIO console port"
+            MINIO_CONSOLE_PORT=$(gum input --placeholder "9001" --value "9001")
+        else
+            # Fallback to standard prompts
+            read -p "Enter installation directory [./ducklake]: " INSTALL_DIR
+            INSTALL_DIR=${INSTALL_DIR:-./ducklake}
+            
+            read -p "Enter instance name [default]: " INSTANCE_NAME
+            INSTANCE_NAME=${INSTANCE_NAME:-default}
+            
+            read -p "Enter S3 bucket name [ducklake-bucket]: " BUCKET_NAME
+            BUCKET_NAME=${BUCKET_NAME:-ducklake-bucket}
+            
+            read -p "Enter data path within bucket [data]: " DATA_PATH
+            DATA_PATH=${DATA_PATH:-data}
+            
+            read -p "Enter catalog database name [ducklake_catalog]: " DB_NAME
+            DB_NAME=${DB_NAME:-ducklake_catalog}
+            
+            read -p "Enter database username [ducklake]: " DB_USER
+            DB_USER=${DB_USER:-ducklake}
+            
+            read -s -p "Enter database password [ducklake123]: " DB_PASS
+            echo
+            DB_PASS=${DB_PASS:-ducklake123}
+            
+            read -p "Enter PostgreSQL port [5432]: " POSTGRES_PORT
+            POSTGRES_PORT=${POSTGRES_PORT:-5432}
+            
+            read -p "Enter MinIO port [9000]: " MINIO_PORT
+            MINIO_PORT=${MINIO_PORT:-9000}
+            
+            read -p "Enter MinIO console port [9001]: " MINIO_CONSOLE_PORT
+            MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT:-9001}
+        fi
+    fi
+    
+    # Create directory if it doesn't exist
+    if [ ! -d "$INSTALL_DIR" ]; then
+        execute_cmd "mkdir -p \"$INSTALL_DIR\"" "Creating directory: $INSTALL_DIR"
+    fi
+    
+    # Convert to absolute path and change to it
+    INSTALL_DIR=$(realpath "$INSTALL_DIR")
+    if [ "$DRY_RUN" = false ]; then
+        cd "$INSTALL_DIR"
+    fi
+    print_status "Using installation directory: $INSTALL_DIR"
+    echo
+    
+    # Export for use in other functions
+    export BUCKET_NAME DATA_PATH DB_NAME DB_USER DB_PASS INSTALL_DIR INSTANCE_NAME POSTGRES_PORT MINIO_PORT MINIO_CONSOLE_PORT
+    
+    # Validate configuration
+    if ! validate_config; then
+        exit 1
+    fi
+    
+    echo
+    print_success "Configuration summary:"
+    if command -v gum >/dev/null 2>&1; then
+        gum style --foreground 240 "  Installation: $INSTALL_DIR"
+        gum style --foreground 240 "  Instance: $INSTANCE_NAME"
+        gum style --foreground 240 "  Bucket: s3://$BUCKET_NAME/$DATA_PATH"
+        gum style --foreground 240 "  Database: $DB_NAME"
+        gum style --foreground 240 "  User: $DB_USER"
+        gum style --foreground 240 "  PostgreSQL Port: $POSTGRES_PORT"
+        gum style --foreground 240 "  MinIO Port: $MINIO_PORT"
+        gum style --foreground 240 "  MinIO Console Port: $MINIO_CONSOLE_PORT"
+    else
+        echo "  Installation: $INSTALL_DIR"
+        echo "  Instance: $INSTANCE_NAME"
+        echo "  Bucket: s3://$BUCKET_NAME/$DATA_PATH"
+        echo "  Database: $DB_NAME"
+        echo "  User: $DB_USER"
+        echo "  PostgreSQL Port: $POSTGRES_PORT"
+        echo "  MinIO Port: $MINIO_PORT"
+        echo "  MinIO Console Port: $MINIO_CONSOLE_PORT"
+    fi
+    echo
+}
+
+# Get server IP for remote connections
+get_server_ip() {
+    local ip=""
+    
+    # Try multiple methods to get external IPv4 IP with timeouts
+    if command_exists curl; then
+        ip=$(curl -s -4 --connect-timeout $CURL_CONNECT_TIMEOUT --max-time $CURL_TIMEOUT ifconfig.me 2>/dev/null) || \
+        ip=$(curl -s -4 --connect-timeout $CURL_CONNECT_TIMEOUT --max-time $CURL_TIMEOUT ipinfo.io/ip 2>/dev/null) || \
+        ip=$(curl -s -4 --connect-timeout $CURL_CONNECT_TIMEOUT --max-time $CURL_TIMEOUT icanhazip.com 2>/dev/null)
+    fi
+    
+    # Fallback to local IP
+    if [ -z "$ip" ]; then
+        ip=$(hostname -I | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+    fi
+    
+    echo "$ip"
+}
+
+# Uninstall DuckLake
+uninstall_ducklake() {
+    print_status "Starting DuckLake uninstallation..."
+    
+    # Try to find existing installations
+    local found_installations=:
+    
+    # Look for common installation directories
+    for dir in "./ducklake" "$HOME/ducklake" "/opt/ducklake"; do
+        if [ -d "$dir" ] && [ -f "$dir/pyproject.toml" ]; then
+            found_installations+=("$dir")
+        fi
+    done
+    
+    if [ ${#found_installations[@]} -eq 0 ]; then
+        print_warning "No DuckLake installations found"
+        return 0
+    fi
+    
+    if command -v gum >/dev/null 2>&1; then
+        gum style --foreground 33 --bold "Found DuckLake installations:"
+        for i in "${!found_installations[@]}"; do
+            gum style --foreground 240 "  $((i+1)). ${found_installations[$i]}"
+        done
+    else
+        echo "Found DuckLake installations:"
+        for i in "${!found_installations[@]}"; do
+            echo "  $((i+1)). ${found_installations[$i]}"
+        done
+    fi
+    echo
+    
+    local selection
+    if [ "$NON_INTERACTIVE" = false ]; then
+        if command -v gum >/dev/null 2>&1; then
+            local options=:
+            for i in "${!found_installations[@]}"; do
+                options+=("$((i+1)). ${found_installations[$i]}")
+            done
+            
+            selected_option=$(printf '%s\n' "${options[@]}" | gum choose --header "Select installation to remove:")
+            selection=$(echo "$selected_option" | cut -d. -f1)
+        else
+            read -p "Select installation to remove [1]: " selection
+            selection=${selection:-1}
+        fi
+    else
+        selection=1
+    fi
+    
+    if [ "$selection" -ge 1 ] && [ "$selection" -le ${#found_installations[@]} ]; then
+        local install_dir="${found_installations[$((selection-1))]}"
+        
+        print_status "Removing DuckLake installation: $install_dir"
+        
+        # Change to installation directory
+        if [ "$DRY_RUN" = false ]; then
+            cd "$install_dir"
+        fi
+        
+        # Stop services if they exist
+        if [ -f "pyproject.toml" ]; then
+            execute_cmd "uv run task stop 2>/dev/null || true" "Stopping DuckLake services"
+            execute_cmd "uv run task clean 2>/dev/null || true" "Cleaning up containers and volumes"
+        fi
+        
+        # Remove installation directory
+        execute_cmd "rm -rf \"$install_dir\"" "Removing installation directory"
+        
+        print_success "DuckLake uninstalled successfully"
+    else
+        print_error "Invalid selection"
+        exit 1
+    fi
+}
+
+# Create embedded files function
+create_files() {
+    if [ "$DRY_RUN" = true ]; then
+        print_status "[DRY RUN] Would create configuration files in: $INSTALL_DIR"
+        return 0
+    fi
+    
+    print_status "Creating configuration files..."
+    
+    # Detect if we need special userns flags for high UIDs
+    local current_uid=$(id -u)
+    local postgres_userns_flag=""
+    local minio_userns_flag=""
+    
+    if [ "$current_uid" -gt 100000 ]; then
+        postgres_userns_flag="--userns=host"
+        minio_userns_flag="--userns=keep-id"
+        print_status "Detected high UID ($current_uid), using --userns=host for PostgreSQL and --userns=keep-id for MinIO"
+    fi
+
+    # Create pyproject.toml
+    cat > pyproject.toml << EOF
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ducklake-server"
+version = "0.1.0"
+description = "DuckLake server with PostgreSQL catalog and MinIO storage"
+requires-python = ">=3.10"
+
+dependencies = [
+    "duckdb>=1.3.0",
+    "psycopg2-binary>=2.9.0",
+    "taskipy>=1.12.0",
+    "click>=8.0.0",
+    "rich>=13.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["ducklake_server"]
+
+[tool.taskipy.tasks]
+# Core service management
+start-postgres = "podman run -d --name ducklake-postgres-${INSTANCE_NAME} --replace $postgres_userns_flag -e POSTGRES_DB=${DB_NAME} -e POSTGRES_USER=${DB_USER} -e POSTGRES_PASSWORD=${DB_PASS} -e POSTGRES_HOST_AUTH_METHOD=trust -p ${POSTGRES_PORT}:5432 -v postgres_data_${INSTANCE_NAME}:/var/lib/postgresql/data -v $(pwd)/init.sql:/docker-entrypoint-initdb.d/init.sql docker.io/library/postgres:15"
+start-minio = "podman run -d --name ducklake-minio-${INSTANCE_NAME} --replace $minio_userns_flag -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin -p ${MINIO_PORT}:9000 -p ${MINIO_CONSOLE_PORT}:9001 -v minio_data_${INSTANCE_NAME}:/data quay.io/minio/minio:latest server /data --console-address :9001"
+create-bucket = "sleep 5 && podman exec ducklake-minio-${INSTANCE_NAME} mc alias set local http://localhost:9000 minioadmin minioadmin && podman exec ducklake-minio-${INSTANCE_NAME} mc mb local/${BUCKET_NAME} 2>/dev/null || true"
+start = "task start-postgres && task start-minio && task create-bucket"
+
+stop-postgres = "podman stop ducklake-postgres-${INSTANCE_NAME} 2>/dev/null || true && podman rm ducklake-postgres-${INSTANCE_NAME} 2>/dev/null || true"
+stop-minio = "podman stop ducklake-minio-${INSTANCE_NAME} 2>/dev/null || true && podman rm ducklake-minio-${INSTANCE_NAME} 2>/dev/null || true"
+stop = "task stop-postgres && task stop-minio"
+
+# Status and monitoring
+status = "podman ps --filter name=ducklake-*-${INSTANCE_NAME}"
+logs-postgres = "podman logs -f ducklake-postgres-${INSTANCE_NAME}"
+logs-minio = "podman logs -f ducklake-minio-${INSTANCE_NAME}"
+
+# Data management
+clean = "task stop && podman volume rm minio_data_${INSTANCE_NAME} postgres_data_${INSTANCE_NAME} 2>/dev/null || true"
+reset = "task clean && task start"
+EOF
+
+    # Create init.sql
+    cat > init.sql << EOF
+-- Initialize the DuckLake catalog database
+-- Create user if it doesn't exist
+DO \$\$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${DB_USER}') THEN
+        CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';
+    END IF;
+END
+\$\$;
+
+-- Connect to the target database
+\c ${DB_NAME};
+
+-- Grant necessary permissions
+GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};
+GRANT ALL ON SCHEMA public TO ${DB_USER};
+GRANT CREATE ON SCHEMA public TO ${DB_USER};
+
+-- Create extension if available
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Display confirmation
+SELECT 'DuckLake catalog database initialized successfully' AS status;
+EOF
+
+    # Create .env file
+    cat > .env << EOF
+# PostgreSQL Configuration
+POSTGRES_DB=${DB_NAME}
+POSTGRES_USER=${DB_USER}
+POSTGRES_PASSWORD=${DB_PASS}
+POSTGRES_PORT=5432
+
+# MinIO Configuration
+MINIO_USER=minioadmin
+MINIO_PASSWORD=minioadmin
+MINIO_PORT=9000
+MINIO_CONSOLE_PORT=9001
+EOF
+
+    # Create dummy Python module to satisfy packaging
+    mkdir -p ducklake_server
+    echo "# DuckLake Server" > ducklake_server/__init__.py
+
+    print_success "Configuration files created"
+}
+
+# Check and setup user namespaces for podman
+setup_user_namespaces() {
+    print_status "Checking user namespace configuration..."
+    
+    local user=$(whoami)
+    local uid=$(id -u)
+    local subuid_exists=false
+    local subgid_exists=false
+    
+    # Check if user has subuid/subgid entries
+    if [ -f /etc/subuid ] && grep -q "^${user}:" /etc/subuid; then
+        subuid_exists=true
+    fi
+    
+    if [ -f /etc/subgid ] && grep -q "^${user}:" /etc/subgid; then
+        subgid_exists=true
+    fi
+    
+    if [ "$subuid_exists" = false ] || [ "$subgid_exists" = false ]; then
+        print_warning "User namespace configuration incomplete"
+        print_step "Adding user namespace entries..."
+        
+        # Try to add entries (may require sudo)
+        if command_exists sudo; then
+            if [ "$subuid_exists" = false ]; then
+                echo "${user}:100000:65536" | sudo tee -a /etc/subuid >/dev/null
+            fi
+            if [ "$subgid_exists" = false ]; then
+                echo "${user}:100000:65536" | sudo tee -a /etc/subgid >/dev/null
+            fi
+            print_success "User namespace entries added"
+        else
+            print_error "Cannot configure user namespaces without sudo access"
+            if command -v gum >/dev/null 2>&1; then
+                gum style --foreground 240 "Please ask your administrator to add these lines:"
+                gum style --foreground 240 "To /etc/subuid: ${user}:100000:65536"
+                gum style --foreground 240 "To /etc/subgid: ${user}:100000:65536"
+            else
+                echo "Please ask your administrator to add these lines:"
+                echo "To /etc/subuid: ${user}:100000:65536"
+                echo "To /etc/subgid: ${user}:100000:65536"
+            fi
+            exit 1
+        fi
+    else
+        print_success "User namespaces properly configured"
+    fi
+}
+
+# Install podman if missing
+install_podman() {
+    if ! command_exists podman; then
+        if [ "$DRY_RUN" = true ]; then
+            print_status "[DRY RUN] Would install Podman"
+            return 0
+        fi
+        
+        print_status "Installing Podman..."
+        
+        # Detect OS and install podman
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            case $ID in
+                ubuntu|debian)
+                    if command_exists apt-get; then
+                        execute_cmd "sudo apt-get update && sudo apt-get install -y podman" "Installing Podman via apt"
+                    else
+                        print_error "apt-get not found on Debian/Ubuntu system"
+                        exit 1
+                    fi
+                    ;;
+                fedora|centos|rhel)
+                    if command_exists dnf; then
+                        execute_cmd "sudo dnf install -y podman" "Installing Podman via dnf"
+                    elif command_exists yum; then
+                        execute_cmd "sudo yum install -y podman" "Installing Podman via yum"
+                    else
+                        print_error "Package manager not found on RHEL/CentOS/Fedora system"
+                        exit 1
+                    fi
+                    ;;
+                *)
+                    print_error "Unsupported OS: $ID"
+                    print_step "Please install Podman manually: https://podman.io/docs/installation"
+                    exit 1
+                    ;;
+            esac
+        else
+            print_error "Cannot detect OS. Please install Podman manually."
+            exit 1
+        fi
+        
+        if command_exists podman; then
+            print_success "Podman installed successfully"
+        else
+            print_error "Failed to install Podman"
+            exit 1
+        fi
+    else
+        print_success "Podman found"
+    fi
+}
+
+# Parse command line arguments first
+parse_args "$@"
+
+# Handle container management commands
+if [ -n "$COMMAND" ]; then
+    case "$COMMAND" in
+        status)
+            container_status "$INSTANCE_FILTER"
+            exit 0
+            ;;
+        start)
+            container_start "$INSTANCE_FILTER"
+            exit 0
+            ;;
+        stop)
+            container_stop "$INSTANCE_FILTER"
+            exit 0
+            ;;
+        restart)
+            container_restart "$INSTANCE_FILTER"
+            exit 0
+            ;;
+        logs)
+            container_logs "$LOG_SERVICE" "$INSTANCE_FILTER"
+            exit 0
+            ;;
+        clean)
+            container_clean "$INSTANCE_FILTER"
+            exit 0
+            ;;
+        *)
+            print_error "Unknown command: $COMMAND"
+            exit 1
+            ;;
+    esac
+fi
+
+# Handle uninstall mode
+if [ "$UNINSTALL" = true ]; then
+    uninstall_ducklake
+    exit 0
+fi
+
+print_header "DuckLake Complete Installer"
+if [ "$DRY_RUN" = true ]; then
+    if command -v gum >/dev/null 2>&1; then
+        gum style --foreground 220 --bold --align center "[DRY RUN MODE]"
+    else
+        echo "                   [DRY RUN MODE]"
+    fi
+fi
+echo ""
+
+# Get user configuration
+get_user_config
+
+# Setup logging after we know the install directory
+setup_logging
+
+# Check prerequisites
+print_status "Checking prerequisites..."
+
+# Check if running as root (not recommended for podman)
+if [ "$EUID" -eq 0 ]; then
+    print_warning "Running as root. Podman rootless mode is recommended."
+    print_step "Consider running as a regular user instead."
+fi
+
+# Check Python version with enhanced error messages
+check_python() {
+    if ! command_exists python3; then
+        print_warning "Python 3 not found in system PATH"
+        print_step "UV will manage Python installation automatically"
+        return 0
+    fi
+    
+    local python_version
+    python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null)
+    
+    if [ -z "$python_version" ]; then
+        print_warning "Failed to determine Python version, UV will handle Python setup"
+        return 0
+    fi
+    
+    local python_major python_minor
+    python_major=$(echo "$python_version" | cut -d. -f1)
+    python_minor=$(echo "$python_version" | cut -d. -f2)
+    
+    if [ "$python_major" -ge 3 ] && [ "$python_minor" -ge 10 ]; then
+        print_success "Python $python_version found"
+        log_message "INFO" "Python version: $python_version"
+        return 0
+    else
+        print_warning "Python 3.10+ preferred. Found: $python_version"
+        print_step "UV will manage Python version automatically"
+        return 0
+    fi
+}
+
+check_python
+
+# Install podman if needed
+install_podman
+
+# Setup user namespaces
+setup_user_namespaces
+
+# Check UV package manager with enhanced error handling
+install_uv() {
+    if [ "$DRY_RUN" = true ]; then
+        print_status "[DRY RUN] Would install UV package manager"
+        return 0
+    fi
+    
+    print_status "UV not found. Installing UV..."
+    
+    # Create temp directory for download
+    TEMP_DIR=$(mktemp -d)
+    TEMP_FILES+=("$TEMP_DIR")
+    
+    # Download installer script with timeout and retry
+    local install_script="$TEMP_DIR/install.sh"
+    
+    if ! retry_command 3 2 "UV installer download" \
+        "curl -LsSf --connect-timeout $CURL_CONNECT_TIMEOUT --max-time $CURL_TIMEOUT https://astral.sh/uv/install.sh -o \"$install_script\""; then
+        print_error "Failed to download UV installer after multiple attempts"
+        print_step "Manual installation: curl -LsSf https://astral.sh/uv/install.sh | sh"
+        return 1
+    fi
+    
+    # Verify download
+    if [ ! -f "$install_script" ] || [ ! -s "$install_script" ]; then
+        print_error "UV installer download appears to be corrupted"
+        return 1
+    fi
+    
+    # Install UV
+    if ! bash "$install_script"; then
+        print_error "UV installation failed"
+        print_step "Try manual installation: curl -LsSf https://astral.sh/uv/install.sh | sh"
+        return 1
+    fi
+    
+    # Add to PATH and reload
+    export PATH="$HOME/.local/bin:$PATH"
+    
+    # Source shell profile to persist PATH changes
+    if [ -f "$HOME/.bashrc" ]; then
+        if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc"; then
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+        fi
+    fi
+    
+    # Verify installation
+    if command_exists uv; then
+        print_success "UV installed successfully"
+        return 0
+    else
+        print_error "UV installation completed but command not found"
+        print_step "Try adding $HOME/.local/bin to your PATH manually"
+        return 1
+    fi
+}
+
+if ! command_exists uv; then
+    if ! install_uv; then
+        exit 1
+    fi
+else
+    print_success "UV found"
+    # Check UV version for compatibility
+    UV_VERSION=$(uv --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [ -n "$UV_VERSION" ]; then
+        log_message "INFO" "UV version: $UV_VERSION"
+    fi
+fi
+
+# Test podman configuration with enhanced diagnostics
+test_podman_config() {
+    if [ "$DRY_RUN" = true ]; then
+        print_status "[DRY RUN] Would test podman configuration"
+        return 0
+    fi
+    
+    print_status "Testing podman configuration..."
+    
+    # Test basic podman functionality
+    if ! podman info >/dev/null 2>&1; then
+        print_error "Podman configuration issues detected"
+        echo ""
+        
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 33 --bold "Diagnostic information:"
+        else
+            echo "Diagnostic information:"
+        fi
+        
+        # Check if running as root
+        if [ "$EUID" -eq 0 ]; then
+            print_step "Running as root (rootful mode)"
+        else
+            print_step "Running as user: $(whoami) (rootless mode)"
+        fi
+        
+        # Check user namespaces
+        if [ ! -f /etc/subuid ] || ! grep -q "^$(whoami):" /etc/subuid; then
+            print_step "Missing subuid configuration"
+        fi
+        
+        if [ ! -f /etc/subgid ] || ! grep -q "^$(whoami):" /etc/subgid; then
+            print_step "Missing subgid configuration"
+        fi
+        
+        echo ""
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 33 --bold "Common fixes for podman permission errors:"
+        else
+            echo "Common fixes for podman permission errors:"
+        fi
+        
+        print_step "Check podman configuration: podman info"
+        print_step "Restart user session: sudo loginctl terminate-user $(whoami)"
+        print_step "For rootless mode: systemctl --user enable --now podman.socket"
+        print_step "Check user namespaces: cat /etc/subuid /etc/subgid"
+        echo ""
+        print_step "After fixes, re-run this installer."
+        return 1
+    fi
+    
+    print_success "Podman configuration verified"
+    
+    # Get podman version for logging
+    local podman_version
+    podman_version=$(podman --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [ -n "$podman_version" ]; then
+        log_message "INFO" "Podman version: $podman_version"
+    fi
+    
+    return 0
+}
+
+# Test image pulling permissions with timeout
+test_registry_access() {
+    if [ "$DRY_RUN" = true ]; then
+        print_status "[DRY RUN] Would test container registry access"
+        return 0
+    fi
+    
+    print_status "Testing container registry access..."
+    
+    # Test with timeout and specific error handling
+    local test_image="docker.io/library/hello-world:latest"
+    
+    if timeout 60 podman pull --quiet "$test_image" >/dev/null 2>&1; then
+        print_success "Container registry access verified"
+        # Clean up test image
+        podman rmi "$test_image" >/dev/null 2>&1 || true
+        return 0
+    else
+        print_warning "Container registry access may be limited"
+        echo ""
+        
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 240 "This could be due to:"
+        else
+            echo "This could be due to:"
+        fi
+        
+        print_step "Network restrictions or firewall"
+        print_step "Registry authentication required"
+        print_step "Corporate proxy settings"
+        print_step "DNS resolution issues"
+        echo ""
+        
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 240 "Troubleshooting steps:"
+        else
+            echo "Troubleshooting steps:"
+        fi
+        
+        print_step "Test network: curl -I https://registry-1.docker.io"
+        print_step "Check proxy settings: echo \$HTTP_PROXY \$HTTPS_PROXY"
+        print_step "Try manual pull: podman pull $test_image"
+        echo ""
+        print_step "Continuing anyway - images will be pulled during service start..."
+        return 0
+    fi
+}
+
+if ! test_podman_config; then
+    exit 1
+fi
+
+test_registry_access
+
+# Use the installation directory from config
+DUCKLAKE_DIR="$INSTALL_DIR"
+
+# Create all configuration files
+create_files
+
+# Install Python dependencies with error handling
+install_python_deps() {
+    if [ "$DRY_RUN" = true ]; then
+        print_status "[DRY RUN] Would install Python dependencies"
+        return 0
+    fi
+    
+    print_status "Installing Python dependencies..."
+    
+    # Force UV to use local directory, not parent venv
+    unset VIRTUAL_ENV
+    
+    # Create virtual environment with Python 3.10+ and error handling
+    if ! uv venv --python 3.10; then
+        print_warning "Failed to create venv with Python 3.10, trying default Python"
+        if ! uv venv; then
+            print_error "Failed to create virtual environment"
+            print_step "Try manually: cd $INSTALL_DIR && uv venv"
+            return 1
+        fi
+    fi
+    
+    # Install dependencies with retry
+    if ! retry_command 3 5 "Python dependency installation" "uv sync"; then
+        print_error "Failed to install Python dependencies"
+        echo ""
+        
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 240 "Troubleshooting steps:"
+        else
+            echo "Troubleshooting steps:"
+        fi
+        
+        print_step "Check internet connection"
+        print_step "Try manual installation: cd $INSTALL_DIR && uv sync"
+        print_step "Check UV configuration: uv --version"
+        print_step "Clear UV cache: uv cache clean"
+        return 1
+    fi
+    
+    print_success "Python dependencies installed"
+    return 0
+}
+
+if ! install_python_deps; then
+    exit 1
+fi
+
+# Check for port conflicts
+print_status "Checking for port conflicts..."
+CONFLICTING_CONTAINERS=""
+
+# Check each port for conflicts
+for port in $POSTGRES_PORT $MINIO_PORT $MINIO_CONSOLE_PORT; do
+    CONTAINER=$(podman ps --format "{{.Names}}" --filter "publish=$port" 2>/dev/null | head -1)
+    if [ -n "$CONTAINER" ]; then
+        CONFLICTING_CONTAINERS="$CONFLICTING_CONTAINERS $CONTAINER"
+    fi
+done
+
+if [ -n "$CONFLICTING_CONTAINERS" ]; then
+    print_warning "Found containers using required ports:"
+    for container in $CONFLICTING_CONTAINERS; do
+        PORTS=$(podman ps --format "{{.Ports}}" --filter "name=$container")
+        print_step "$container: $PORTS"
+    done
+    echo ""
+    
+    local stop_conflicting="n"
+    if [ "$NON_INTERACTIVE" = false ]; then
+        if command -v gum >/dev/null 2>&1; then
+            if gum confirm "Stop and remove conflicting containers?"; then
+                stop_conflicting="y"
+            fi
+        else
+            read -p "Stop and remove conflicting containers? [y/N]: " stop_conflicting
+        fi
+    fi
+    
+    if [ "$stop_conflicting" = "y" ] || [ "$stop_conflicting" = "Y" ]; then
+        print_status "Stopping conflicting containers..."
+        for container in $CONFLICTING_CONTAINERS; do
+            podman stop "$container" 2>/dev/null || true
+            podman rm "$container" 2>/dev/null || true
+            print_step "Removed: $container"
+        done
+    else
+        print_error "Cannot continue with port conflicts"
+        exit 1
+    fi
+fi
+
+# Start services
+if [ "$DRY_RUN" = true ]; then
+    print_status "[DRY RUN] Would start DuckLake services"
+else
+    print_status "Starting DuckLake services..."
+    (uv run task start) &
+    show_progress $! "Starting PostgreSQL and MinIO containers"
+fi
+
+# Enhanced service checking with better error handling
+check_service() {
+    local service_name="$1"
+    local max_attempts=60
+    local attempt=0
+    local service_type="$2"
+    
+    if [ "$DRY_RUN" = true ]; then
+        print_status "[DRY RUN] Would check $service_name status"
+        return 0
+    fi
+    
+    print_status "Waiting for $service_name to be ready..."
+    while [ $attempt -lt $max_attempts ]; do
+        # Check if container exists and is running
+        if podman ps --filter name="$service_name" --format "{{.Names}}" 2>/dev/null | grep -q "$service_name"; then
+            # Additional health check for specific services
+            case "$service_type" in
+                "postgres")
+                    if podman exec "$service_name" pg_isready -U "$DB_USER" >/dev/null 2>&1; then
+                        return 0
+                    fi
+                    ;;
+                "minio")
+                    if podman exec "$service_name" mc --version >/dev/null 2>&1; then
+                        return 0
+                    fi
+                    ;;
+                *)
+                    return 0
+                    ;;
+            esac
+        fi
+        
+        sleep 1
+        attempt=$((attempt + 1))
+        if [ $((attempt % 10)) -eq 0 ]; then
+            echo -n "."
+        fi
+    done
+    return 1
+}
+
+# Check services with better error handling and recovery suggestions
+check_postgres() {
+    if check_service "ducklake-postgres-${INSTANCE_NAME}" "postgres"; then
+        print_success "PostgreSQL is running and accepting connections"
+    else
+        print_error "PostgreSQL failed to start or is not accepting connections"
+        echo ""
+        
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 240 "Troubleshooting steps:"
+        else
+            echo "Troubleshooting steps:"
+        fi
+        
+        print_step "Check PostgreSQL logs: cd $DUCKLAKE_DIR && uv run task logs-postgres"
+        print_step "Verify port $POSTGRES_PORT is not in use: ss -tuln | grep :$POSTGRES_PORT"
+        print_step "Check container status: podman ps -a --filter name=ducklake-postgres-${INSTANCE_NAME}"
+        print_step "Try restarting: cd $DUCKLAKE_DIR && uv run task stop && uv run task start"
+        
+        # Try to get more specific error information
+        if podman ps -a --filter name="ducklake-postgres-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
+            print_step "Container exited - check logs for startup errors"
+            podman logs "ducklake-postgres-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
+        fi
+        
+        return 1
+    fi
+}
+
+check_minio() {
+    if check_service "ducklake-minio-${INSTANCE_NAME}" "minio"; then
+        print_success "MinIO is running"
+    else
+        print_error "MinIO failed to start"
+        echo ""
+        
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 240 "Troubleshooting steps:"
+        else
+            echo "Troubleshooting steps:"
+        fi
+        
+        print_step "Check MinIO logs: cd $DUCKLAKE_DIR && uv run task logs-minio"
+        print_step "Verify ports $MINIO_PORT and $MINIO_CONSOLE_PORT are not in use"
+        print_step "Check container status: podman ps -a --filter name=ducklake-minio-${INSTANCE_NAME}"
+        print_step "Try restarting: cd $DUCKLAKE_DIR && uv run task stop && uv run task start"
+        
+        # Try to get more specific error information
+        if podman ps -a --filter name="ducklake-minio-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
+            print_step "Container exited - check logs for startup errors"
+            podman logs "ducklake-minio-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
+        fi
+        
+        return 1
+    fi
+}
+
+# Check services with retry logic
+if ! retry_command 3 5 "PostgreSQL startup" "check_postgres"; then
+    exit 1
+fi
+
+if ! retry_command 3 5 "MinIO startup" "check_minio"; then
+    exit 1
+fi
+
+# Get server IP for remote connections
+SERVER_IP=$(get_server_ip)
+if [ -z "$SERVER_IP" ]; then
+    SERVER_IP="YOUR_SERVER_IP"
+    print_warning "Could not determine server IP automatically"
+fi
+
+# Print connection information
+echo ""
+print_header "DuckLake Server Setup Complete!"
+echo ""
+
+if command -v gum >/dev/null 2>&1; then
+    gum style --foreground 33 --bold "Services Status:"
+    gum style --foreground 255 "  PostgreSQL Catalog: $SERVER_IP:$POSTGRES_PORT"
+    gum style --foreground 255 "  MinIO Object Storage: $SERVER_IP:$MINIO_PORT"
+    gum style --foreground 255 "  MinIO Web Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT"
+    echo ""
+    gum style --foreground 33 --bold "Credentials:"
+    gum style --foreground 255 "  PostgreSQL: ${DB_USER} / ${DB_PASS}"
+    gum style --foreground 255 "  MinIO: minioadmin / minioadmin"
+    echo ""
+    gum style --foreground 33 --bold "Remote Connection Code:"
+    gum style --foreground 240 "Copy this into your local Python/DuckDB environment:"
+else
+    echo "Services Status:"
+    echo "  PostgreSQL Catalog: $SERVER_IP:$POSTGRES_PORT"
+    echo "  MinIO Object Storage: $SERVER_IP:$MINIO_PORT"
+    echo "  MinIO Web Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT"
+    echo ""
+    echo "Credentials:"
+    echo "  PostgreSQL: ${DB_USER} / ${DB_PASS}"
+    echo "  MinIO: minioadmin / minioadmin"
+    echo ""
+    echo "Remote Connection Code:"
+    echo "Copy this into your local Python/DuckDB environment:"
+fi
+
+echo ""
+print_separator
+if command -v gum >/dev/null 2>&1; then
+    gum style --foreground 240 --margin "1 0" \
+'import duckdb
+
+# Connect to DuckDB
+conn = duckdb.connect:
+
+# Install required extensions
+conn.execute("INSTALL ducklake")
+conn.execute("INSTALL postgres") 
+conn.execute("INSTALL httpfs")
+conn.execute("LOAD ducklake")
+conn.execute("LOAD postgres")
+conn.execute("LOAD httpfs")
+
+# Configure S3 connection to your MinIO server
+conn.execute(f"""
+    SET s3_region='"'"'us-east-1'"'"';
+    SET s3_access_key_id='"'"'minioadmin'"'"';
+    SET s3_secret_access_key='"'"'minioadmin'"'"';
+    SET s3_endpoint='"'"''"$SERVER_IP"':'"$MINIO_PORT"''"'"';
+    SET s3_use_ssl=false;
+    SET s3_url_style='"'"'path'"'"';
+""")
+
+# Connect to your DuckLake server
+conn.execute(f"""
+    ATTACH '"'"'ducklake:postgres:dbname='"${DB_NAME}"'
+            user='"${DB_USER}"'  
+            password='"${DB_PASS}"'
+            host='"$SERVER_IP"'
+            port='"$POSTGRES_PORT"''"'"' AS remote_ducklake
+            (DATA_PATH '"'"'s3://'"${BUCKET_NAME}"'/'"${DATA_PATH}"''"'"');
+""")
+
+# Test the connection
+print("Connected to remote DuckLake!")
+
+# Example: Create a table and insert data
+conn.execute("""
+    CREATE TABLE IF NOT EXISTS remote_ducklake.test_table (
+        id INTEGER,
+        name VARCHAR,
+        timestamp TIMESTAMP
+    );
+""")
+
+conn.execute("""
+    INSERT INTO remote_ducklake.test_table (id, name, timestamp) 
+    VALUES (1, '"'"'Remote Test'"'"', CURRENT_TIMESTAMP), (2, '"'"'DuckLake Demo'"'"', CURRENT_TIMESTAMP);
+""")
+
+# Query the data
+result = conn.execute("SELECT * FROM remote_ducklake.test_table").fetchall:
+print("Data:", result)'
+else
+    cat << EOF
+import duckdb
+
+# Connect to DuckDB
+conn = duckdb.connect:
+
+# Install required extensions
+conn.execute("INSTALL ducklake")
+conn.execute("INSTALL postgres") 
+conn.execute("INSTALL httpfs")
+conn.execute("LOAD ducklake")
+conn.execute("LOAD postgres")
+conn.execute("LOAD httpfs")
+
+# Configure S3 connection to your MinIO server
+conn.execute(f"""
+    SET s3_region='us-east-1';
+    SET s3_access_key_id='minioadmin';
+    SET s3_secret_access_key='minioadmin';
+    SET s3_endpoint='$SERVER_IP:$MINIO_PORT';
+    SET s3_use_ssl=false;
+    SET s3_url_style='path';
+""")
+
+# Connect to your DuckLake server
+conn.execute(f"""
+    ATTACH 'ducklake:postgres:dbname=${DB_NAME}
+            user=${DB_USER}  
+            password=${DB_PASS}
+            host=$SERVER_IP
+            port=$POSTGRES_PORT' AS remote_ducklake
+            (DATA_PATH 's3://${BUCKET_NAME}/${DATA_PATH}');
+""")
+
+# Test the connection
+print("Connected to remote DuckLake!")
+
+# Example: Create a table and insert data
+conn.execute("""
+    CREATE TABLE IF NOT EXISTS remote_ducklake.test_table (
+        id INTEGER,
+        name VARCHAR,
+        timestamp TIMESTAMP
+    );
+""")
+
+conn.execute("""
+    INSERT INTO remote_ducklake.test_table (id, name, timestamp) 
+    VALUES (1, 'Remote Test', CURRENT_TIMESTAMP), (2, 'DuckLake Demo', CURRENT_TIMESTAMP);
+""")
+
+# Query the data
+result = conn.execute("SELECT * FROM remote_ducklake.test_table").fetchall:
+print("Data:", result)
+EOF
+fi
+
+print_separator
+echo ""
+
+if command -v gum >/dev/null 2>&1; then
+    gum style --foreground 33 --bold "Server Management Commands:"
+    gum style --foreground 240 "  Status:    cd $DUCKLAKE_DIR && uv run task status"
+    gum style --foreground 240 "  Stop:      cd $DUCKLAKE_DIR && uv run task stop"
+    gum style --foreground 240 "  Restart:   cd $DUCKLAKE_DIR && uv run task start"
+    gum style --foreground 240 "  Logs:      cd $DUCKLAKE_DIR && uv run task logs-postgres"
+    gum style --foreground 240 "  Cleanup:   cd $DUCKLAKE_DIR && uv run task clean"
+    echo ""
+    gum style --foreground 33 --bold "Web Interfaces:"
+    gum style --foreground 240 "  MinIO Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT (minioadmin/minioadmin)"
+    echo ""
+    gum style --foreground 33 --bold "Installation Directory: $DUCKLAKE_DIR"
+else
+    echo "Server Management Commands:"
+    echo "  Status:    cd $DUCKLAKE_DIR && uv run task status"
+    echo "  Stop:      cd $DUCKLAKE_DIR && uv run task stop"
+    echo "  Restart:   cd $DUCKLAKE_DIR && uv run task start"
+    echo "  Logs:      cd $DUCKLAKE_DIR && uv run task logs-postgres"
+    echo "  Cleanup:   cd $DUCKLAKE_DIR && uv run task clean"
+    echo ""
+    echo "Web Interfaces:"
+    echo "  MinIO Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT (minioadmin/minioadmin)"
+    echo ""
+    echo "Installation Directory: $DUCKLAKE_DIR"
+fi
+
+echo ""
+print_header "Ready for remote DuckLake connections!"
