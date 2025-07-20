@@ -54,6 +54,15 @@ check_gum() {
 
 check_gum
 
+# Show DuckLake logo
+show_logo() {
+    echo
+    echo
+    title
+    echo "Complete Installer"
+    echo
+}
+
 # Map print functions to YADL style library
 print_status() {
     info "$1"
@@ -242,7 +251,7 @@ container_status() {
         printf "%-30s %-15s %-20s %s\n" "NAME" "STATUS" "PORTS" "IMAGE"
     fi
     
-    print_separator
+    separator
     
     echo "$containers" | while read -r container; do
         if [ -n "$container" ]; then
@@ -438,12 +447,15 @@ container_logs() {
         minio)
             local container_pattern="ducklake-minio"
             ;;
+        mathesar)
+            local container_pattern="ducklake-mathesar"
+            ;;
         *)
             print_error "Unknown service: $service"
             if command -v gum >/dev/null 2>&1; then
-                gum style --foreground 33 "Available services: postgres, minio"
+                gum style --foreground 33 "Available services: postgres, minio, mathesar"
             else
-                echo "Available services: postgres, minio"
+                echo "Available services: postgres, minio, mathesar"
             fi
             return 1
             ;;
@@ -1048,11 +1060,9 @@ get_user_config() {
     if [ -n "$CONFIG_FILE" ]; then
         load_config "$CONFIG_FILE"
         print_success "Configuration loaded from file"
-        return 0
-    fi
-    
-    # Set defaults for non-interactive mode
-    if [ "$NON_INTERACTIVE" = true ]; then
+        # Don't return early - we still need to create dir and cd
+    elif [ "$NON_INTERACTIVE" = true ]; then
+        # Set defaults for non-interactive mode
         INSTALL_DIR=${INSTALL_DIR:-./ducklake}
         INSTANCE_NAME=${INSTANCE_NAME:-default}
         BUCKET_NAME=${BUCKET_NAME:-ducklake-bucket}
@@ -1136,6 +1146,7 @@ get_user_config() {
         fi
     fi
     
+    # Always create directory and cd into it regardless of config method
     # Create directory if it doesn't exist
     if [ ! -d "$INSTALL_DIR" ]; then
         execute_cmd "mkdir -p \"$INSTALL_DIR\"" "Creating directory: $INSTALL_DIR"
@@ -1260,10 +1271,15 @@ uninstall_ducklake() {
             cd "$install_dir"
         fi
         
-        # Stop services if they exist
-        if [ -f "pyproject.toml" ]; then
-            execute_cmd "uv run task stop 2>/dev/null || true" "Stopping DuckLake services"
-            execute_cmd "uv run task clean 2>/dev/null || true" "Cleaning up containers and volumes"
+        # Stop containers directly
+        local containers
+        containers=$(find_ducklake_containers "${INSTANCE_NAME:-default}")
+        if [ -n "$containers" ]; then
+            echo "$containers" | while read -r container; do
+                if [ -n "$container" ]; then
+                    execute_cmd "podman stop $container 2>/dev/null || true" "Stopping $container"
+                fi
+            done
         fi
         
         # Remove installation directory
@@ -1293,54 +1309,90 @@ create_files() {
     if [ "$current_uid" -gt 100000 ]; then
         postgres_userns_flag="--userns=host"
         minio_userns_flag="--userns=keep-id"
-        print_status "Detected high UID ($current_uid), using --userns=host for PostgreSQL and --userns=keep-id for MinIO"
     fi
+    
+    # Create docker-compose.yml for podman-compose with Mathesar
+    cat > docker-compose.yml << EOF
+version: '3.8'
 
-    # Create pyproject.toml
-    cat > pyproject.toml << EOF
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+services:
+  postgres:
+    image: docker.io/library/postgres:15
+    container_name: ducklake-postgres-${INSTANCE_NAME}
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data_${INSTANCE_NAME}:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-[project]
-name = "ducklake-server"
-version = "0.1.0"
-description = "DuckLake server with PostgreSQL catalog and MinIO storage"
-requires-python = ">=3.10"
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: ducklake-minio-${INSTANCE_NAME}
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "${MINIO_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+    volumes:
+      - minio_data_${INSTANCE_NAME}:/data
+    restart: unless-stopped
 
-dependencies = [
-    "duckdb>=1.3.0",
-    "psycopg2-binary>=2.9.0",
-    "taskipy>=1.12.0",
-    "click>=8.0.0",
-    "rich>=13.0.0",
-]
+  mathesar:
+    image: docker.io/mathesar/mathesar:latest
+    container_name: ducklake-mathesar-${INSTANCE_NAME}
+    environment:
+      SECRET_KEY: ducklake-secret-key-change-in-production
+      DOMAIN_NAME: http://localhost:8000
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_HOST: ducklake-postgres-${INSTANCE_NAME}
+      POSTGRES_PORT: 5432
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      ALLOWED_HOSTS: "*"
+      DEBUG: false
+      MATHESAR_DATABASES: "ducklake_catalog|postgresql://${DB_USER}:${DB_PASS}@ducklake-postgres-${INSTANCE_NAME}:5432/${DB_NAME}"
+    ports:
+      - "8000:8000"
+    volumes:
+      - mathesar_static_${INSTANCE_NAME}:/code/static
+      - mathesar_media_${INSTANCE_NAME}:/code/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-[tool.hatch.build.targets.wheel]
-packages = ["ducklake_server"]
+volumes:
+  postgres_data_${INSTANCE_NAME}:
+  minio_data_${INSTANCE_NAME}:
+  mathesar_static_${INSTANCE_NAME}:
+  mathesar_media_${INSTANCE_NAME}:
 
-[tool.taskipy.tasks]
-# Core service management
-start-postgres = "podman run -d --name ducklake-postgres-${INSTANCE_NAME} --replace $postgres_userns_flag -e POSTGRES_DB=${DB_NAME} -e POSTGRES_USER=${DB_USER} -e POSTGRES_PASSWORD=${DB_PASS} -e POSTGRES_HOST_AUTH_METHOD=trust -p ${POSTGRES_PORT}:5432 -v postgres_data_${INSTANCE_NAME}:/var/lib/postgresql/data -v $(pwd)/init.sql:/docker-entrypoint-initdb.d/init.sql docker.io/library/postgres:15"
-start-minio = "podman run -d --name ducklake-minio-${INSTANCE_NAME} --replace $minio_userns_flag -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin -p ${MINIO_PORT}:9000 -p ${MINIO_CONSOLE_PORT}:9001 -v minio_data_${INSTANCE_NAME}:/data quay.io/minio/minio:latest server /data --console-address :9001"
-create-bucket = "sleep 5 && podman exec ducklake-minio-${INSTANCE_NAME} mc alias set local http://localhost:9000 minioadmin minioadmin && podman exec ducklake-minio-${INSTANCE_NAME} mc mb local/${BUCKET_NAME} 2>/dev/null || true"
-start = "task start-postgres && task start-minio && task create-bucket"
-
-stop-postgres = "podman stop ducklake-postgres-${INSTANCE_NAME} 2>/dev/null || true && podman rm ducklake-postgres-${INSTANCE_NAME} 2>/dev/null || true"
-stop-minio = "podman stop ducklake-minio-${INSTANCE_NAME} 2>/dev/null || true && podman rm ducklake-minio-${INSTANCE_NAME} 2>/dev/null || true"
-stop = "task stop-postgres && task stop-minio"
-
-# Status and monitoring
-status = "podman ps --filter name=ducklake-*-${INSTANCE_NAME}"
-logs-postgres = "podman logs -f ducklake-postgres-${INSTANCE_NAME}"
-logs-minio = "podman logs -f ducklake-minio-${INSTANCE_NAME}"
-
-# Data management
-clean = "task stop && podman volume rm minio_data_${INSTANCE_NAME} postgres_data_${INSTANCE_NAME} 2>/dev/null || true"
-reset = "task clean && task start"
+networks:
+  default:
+    name: ducklake-net-${INSTANCE_NAME}
 EOF
 
-    # Create init.sql
+    # Create init.sql for PostgreSQL
     cat > init.sql << EOF
 -- Initialize the DuckLake catalog database
 -- Create user if it doesn't exist
@@ -1351,9 +1403,6 @@ BEGIN
     END IF;
 END
 \$\$;
-
--- Connect to the target database
-\c ${DB_NAME};
 
 -- Grant necessary permissions
 GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};
@@ -1369,22 +1418,29 @@ EOF
 
     # Create .env file
     cat > .env << EOF
+# DuckLake Configuration
+
 # PostgreSQL Configuration
 POSTGRES_DB=${DB_NAME}
 POSTGRES_USER=${DB_USER}
 POSTGRES_PASSWORD=${DB_PASS}
-POSTGRES_PORT=5432
+POSTGRES_PORT=${POSTGRES_PORT}
 
 # MinIO Configuration
 MINIO_USER=minioadmin
 MINIO_PASSWORD=minioadmin
-MINIO_PORT=9000
-MINIO_CONSOLE_PORT=9001
+MINIO_PORT=${MINIO_PORT}
+MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT}
+
+# Mathesar Configuration  
+MATHESAR_PORT=8000
+
+# Instance Configuration
+INSTANCE_NAME=${INSTANCE_NAME}
+BUCKET_NAME=${BUCKET_NAME}
+DATA_PATH=${DATA_PATH}
 EOF
 
-    # Create dummy Python module to satisfy packaging
-    mkdir -p ducklake_server
-    echo "# DuckLake Server" > ducklake_server/__init__.py
 
     print_success "Configuration files created"
 }
@@ -1535,7 +1591,7 @@ if [ "$UNINSTALL" = true ]; then
     exit 0
 fi
 
-print_header "DuckLake Complete Installer"
+show_logo
 if [ "$DRY_RUN" = true ]; then
     if command -v gum >/dev/null 2>&1; then
         gum style --foreground 220 --bold --align center "[DRY RUN MODE]"
@@ -1656,18 +1712,7 @@ install_uv() {
     fi
 }
 
-if ! command_exists uv; then
-    if ! install_uv; then
-        exit 1
-    fi
-else
-    print_success "UV found"
-    # Check UV version for compatibility
-    UV_VERSION=$(uv --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-    if [ -n "$UV_VERSION" ]; then
-        log_message "INFO" "UV version: $UV_VERSION"
-    fi
-fi
+# UV is not needed for DuckLake container-based installation
 
 # Test podman configuration with enhanced diagnostics
 test_podman_config() {
@@ -1802,21 +1847,12 @@ install_python_deps() {
     
     print_status "Installing Python dependencies..."
     
-    # Force UV to use local directory, not parent venv
-    unset VIRTUAL_ENV
+    # Python dependencies are not needed for container-based DuckLake
+    print_success "Container-based installation - no Python dependencies needed"
+    return 0
     
-    # Create virtual environment with Python 3.10+ and error handling
-    if ! uv venv --python 3.10; then
-        print_warning "Failed to create venv with Python 3.10, trying default Python"
-        if ! uv venv; then
-            print_error "Failed to create virtual environment"
-            print_step "Try manually: cd $INSTALL_DIR && uv venv"
-            return 1
-        fi
-    fi
-    
-    # Install dependencies with retry
-    if ! retry_command 3 5 "Python dependency installation" "uv sync"; then
+    # The following Python installation code is disabled as it's not needed
+    if false; then
         print_error "Failed to install Python dependencies"
         echo ""
         
@@ -1890,8 +1926,67 @@ if [ "$DRY_RUN" = true ]; then
     print_status "[DRY RUN] Would start DuckLake services"
 else
     print_status "Starting DuckLake services..."
-    (uv run task start) &
-    show_progress $! "Starting PostgreSQL and MinIO containers"
+    
+    # Detect if we need special userns flags for high UIDs
+    current_uid=$(id -u)
+    postgres_userns_flag=""
+    minio_userns_flag=""
+    
+    if [ "$current_uid" -gt 100000 ]; then
+        postgres_userns_flag="--userns=host"
+        minio_userns_flag="--userns=keep-id"
+    fi
+    
+    # Create a network for the containers
+    podman network create ducklake-net-${INSTANCE_NAME} 2>/dev/null || true
+    
+    # Start PostgreSQL with restart policy
+    podman run -d --name ducklake-postgres-${INSTANCE_NAME} --replace --restart=unless-stopped \
+        --network ducklake-net-${INSTANCE_NAME} $postgres_userns_flag \
+        -e POSTGRES_DB=${DB_NAME} \
+        -e POSTGRES_USER=${DB_USER} \
+        -e POSTGRES_PASSWORD=${DB_PASS} \
+        -e POSTGRES_HOST_AUTH_METHOD=trust \
+        -p ${POSTGRES_PORT}:5432 \
+        -v postgres_data_${INSTANCE_NAME}:/var/lib/postgresql/data \
+        -v $(pwd)/init.sql:/docker-entrypoint-initdb.d/init.sql:ro \
+        docker.io/library/postgres:15 &
+    
+    # Start MinIO with restart policy
+    podman run -d --name ducklake-minio-${INSTANCE_NAME} --replace --restart=unless-stopped \
+        --network ducklake-net-${INSTANCE_NAME} $minio_userns_flag \
+        -e MINIO_ROOT_USER=minioadmin \
+        -e MINIO_ROOT_PASSWORD=minioadmin \
+        -p ${MINIO_PORT}:9000 \
+        -p ${MINIO_CONSOLE_PORT}:9001 \
+        -v minio_data_${INSTANCE_NAME}:/data \
+        quay.io/minio/minio:latest server /data --console-address :9001 &
+    
+    # Start Mathesar web UI with restart policy (after postgres is ready)
+    podman run -d --name ducklake-mathesar-${INSTANCE_NAME} --replace --restart=unless-stopped \
+        --network ducklake-net-${INSTANCE_NAME} \
+        -e SECRET_KEY=ducklake-secret-key-change-in-production \
+        -e DOMAIN_NAME=http://localhost:8000 \
+        -e POSTGRES_DB=${DB_NAME} \
+        -e POSTGRES_USER=${DB_USER} \
+        -e POSTGRES_PASSWORD=${DB_PASS} \
+        -e POSTGRES_HOST=ducklake-postgres-${INSTANCE_NAME} \
+        -e POSTGRES_PORT=5432 \
+        -e DJANGO_SETTINGS_MODULE=config.settings.production \
+        -e ALLOWED_HOSTS="*" \
+        -e DEBUG=false \
+        -e MATHESAR_DATABASES="ducklake_catalog|postgresql://${DB_USER}:${DB_PASS}@ducklake-postgres-${INSTANCE_NAME}:5432/${DB_NAME}" \
+        -p 8000:8000 \
+        -v mathesar_static_${INSTANCE_NAME}:/code/static \
+        -v mathesar_media_${INSTANCE_NAME}:/code/media \
+        docker.io/mathesar/mathesar:latest &
+    
+    wait
+    
+    # Create bucket
+    sleep 5
+    podman exec ducklake-minio-${INSTANCE_NAME} mc alias set local http://localhost:9000 minioadmin minioadmin 2>/dev/null || true
+    podman exec ducklake-minio-${INSTANCE_NAME} mc mb local/${BUCKET_NAME} 2>/dev/null || true
 fi
 
 # Enhanced service checking with better error handling
@@ -1919,6 +2014,11 @@ check_service() {
                     ;;
                 "minio")
                     if podman exec "$service_name" mc --version >/dev/null 2>&1; then
+                        return 0
+                    fi
+                    ;;
+                "mathesar")
+                    if curl -f http://localhost:8000 >/dev/null 2>&1; then
                         return 0
                     fi
                     ;;
@@ -1951,10 +2051,10 @@ check_postgres() {
             echo "Troubleshooting steps:"
         fi
         
-        print_step "Check PostgreSQL logs: cd $DUCKLAKE_DIR && uv run task logs-postgres"
+        print_step "Check PostgreSQL logs: $0 --logs postgres"
         print_step "Verify port $POSTGRES_PORT is not in use: ss -tuln | grep :$POSTGRES_PORT"
         print_step "Check container status: podman ps -a --filter name=ducklake-postgres-${INSTANCE_NAME}"
-        print_step "Try restarting: cd $DUCKLAKE_DIR && uv run task stop && uv run task start"
+        print_step "Try restarting: $0 --restart"
         
         # Try to get more specific error information
         if podman ps -a --filter name="ducklake-postgres-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
@@ -1979,15 +2079,44 @@ check_minio() {
             echo "Troubleshooting steps:"
         fi
         
-        print_step "Check MinIO logs: cd $DUCKLAKE_DIR && uv run task logs-minio"
+        print_step "Check MinIO logs: $0 --logs minio"
         print_step "Verify ports $MINIO_PORT and $MINIO_CONSOLE_PORT are not in use"
         print_step "Check container status: podman ps -a --filter name=ducklake-minio-${INSTANCE_NAME}"
-        print_step "Try restarting: cd $DUCKLAKE_DIR && uv run task stop && uv run task start"
+        print_step "Try restarting: $0 --restart"
         
         # Try to get more specific error information
         if podman ps -a --filter name="ducklake-minio-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
             print_step "Container exited - check logs for startup errors"
             podman logs "ducklake-minio-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
+        fi
+        
+        return 1
+    fi
+}
+
+# Check Mathesar
+check_mathesar() {
+    if check_service "ducklake-mathesar-${INSTANCE_NAME}" "mathesar"; then
+        print_success "Mathesar is running"
+    else
+        print_error "Mathesar failed to start"
+        echo ""
+        
+        if command -v gum >/dev/null 2>&1; then
+            gum style --foreground 240 "Troubleshooting steps:"
+        else
+            echo "Troubleshooting steps:"
+        fi
+        
+        print_step "Check Mathesar logs: $0 --logs mathesar"
+        print_step "Verify port 8000 is not in use: ss -tuln | grep :8000"
+        print_step "Check container status: podman ps -a --filter name=ducklake-mathesar-${INSTANCE_NAME}"
+        print_step "Try restarting: $0 --restart"
+        
+        # Try to get more specific error information
+        if podman ps -a --filter name="ducklake-mathesar-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
+            print_step "Container exited - check logs for startup errors"
+            podman logs "ducklake-mathesar-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
         fi
         
         return 1
@@ -2000,6 +2129,10 @@ if ! retry_command 3 5 "PostgreSQL startup" "check_postgres"; then
 fi
 
 if ! retry_command 3 5 "MinIO startup" "check_minio"; then
+    exit 1
+fi
+
+if ! retry_command 3 5 "Mathesar startup" "check_mathesar"; then
     exit 1
 fi
 
@@ -2020,6 +2153,7 @@ if command -v gum >/dev/null 2>&1; then
     gum style --foreground 255 "  PostgreSQL Catalog: $SERVER_IP:$POSTGRES_PORT"
     gum style --foreground 255 "  MinIO Object Storage: $SERVER_IP:$MINIO_PORT"
     gum style --foreground 255 "  MinIO Web Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT"
+    gum style --foreground 255 "  Mathesar Database UI: http://$SERVER_IP:8000"
     echo ""
     gum style --foreground 33 --bold "Credentials:"
     gum style --foreground 255 "  PostgreSQL: ${DB_USER} / ${DB_PASS}"
@@ -2032,6 +2166,7 @@ else
     echo "  PostgreSQL Catalog: $SERVER_IP:$POSTGRES_PORT"
     echo "  MinIO Object Storage: $SERVER_IP:$MINIO_PORT"
     echo "  MinIO Web Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT"
+    echo "  Mathesar Database UI: http://$SERVER_IP:8000"
     echo ""
     echo "Credentials:"
     echo "  PostgreSQL: ${DB_USER} / ${DB_PASS}"
@@ -2042,7 +2177,7 @@ else
 fi
 
 echo ""
-print_separator
+separator
 if command -v gum >/dev/null 2>&1; then
     gum style --foreground 240 --margin "1 0" \
 'import duckdb
@@ -2156,31 +2291,33 @@ print("Data:", result)
 EOF
 fi
 
-print_separator
+separator
 echo ""
 
 if command -v gum >/dev/null 2>&1; then
     gum style --foreground 33 --bold "Server Management Commands:"
-    gum style --foreground 240 "  Status:    cd $DUCKLAKE_DIR && uv run task status"
-    gum style --foreground 240 "  Stop:      cd $DUCKLAKE_DIR && uv run task stop"
-    gum style --foreground 240 "  Restart:   cd $DUCKLAKE_DIR && uv run task start"
-    gum style --foreground 240 "  Logs:      cd $DUCKLAKE_DIR && uv run task logs-postgres"
-    gum style --foreground 240 "  Cleanup:   cd $DUCKLAKE_DIR && uv run task clean"
+    gum style --foreground 240 "  Status:    $0 --status"
+    gum style --foreground 240 "  Stop:      $0 --stop"
+    gum style --foreground 240 "  Restart:   $0 --restart"
+    gum style --foreground 240 "  Logs:      $0 --logs postgres"
+    gum style --foreground 240 "  Cleanup:   $0 --clean"
     echo ""
     gum style --foreground 33 --bold "Web Interfaces:"
     gum style --foreground 240 "  MinIO Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT (minioadmin/minioadmin)"
+    gum style --foreground 240 "  Mathesar Database UI: http://$SERVER_IP:8000"
     echo ""
     gum style --foreground 33 --bold "Installation Directory: $DUCKLAKE_DIR"
 else
     echo "Server Management Commands:"
-    echo "  Status:    cd $DUCKLAKE_DIR && uv run task status"
-    echo "  Stop:      cd $DUCKLAKE_DIR && uv run task stop"
-    echo "  Restart:   cd $DUCKLAKE_DIR && uv run task start"
-    echo "  Logs:      cd $DUCKLAKE_DIR && uv run task logs-postgres"
-    echo "  Cleanup:   cd $DUCKLAKE_DIR && uv run task clean"
+    echo "  Status:    $0 --status"
+    echo "  Stop:      $0 --stop"
+    echo "  Restart:   $0 --restart"
+    echo "  Logs:      $0 --logs postgres"
+    echo "  Cleanup:   $0 --clean"
     echo ""
     echo "Web Interfaces:"
     echo "  MinIO Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT (minioadmin/minioadmin)"
+    echo "  Mathesar Database UI: http://$SERVER_IP:8000"
     echo ""
     echo "Installation Directory: $DUCKLAKE_DIR"
 fi

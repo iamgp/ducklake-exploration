@@ -3,7 +3,7 @@
 # Use with: ./ducklake-installer.sh --config ducklake.conf
 
 # Installation directory (absolute or relative path)
-INSTALL_DIR=./ducklake
+INSTALL_DIR=./ducklake-example
 
 # Instance name for this DuckLake setup (useful for multiple instances)
 INSTANCE_NAME=default
