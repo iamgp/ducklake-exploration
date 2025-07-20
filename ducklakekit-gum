@@ -19,11 +19,11 @@ set -e  # Exit on any error
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source the shared YADL style library
-source "$SCRIPT_DIR/../yadl-style.sh"
+source "$SCRIPT_DIR/../datalakekit-style.sh"
 
 # Override title to show DuckLake with yellow background
 title() {
-    title_with_color "DuckLake" "$DUCKLAKE_YELLOW"
+    title_with_color "DuckLakeKit" "$DUCKLAKEKIT_YELLOW"
 }
 
 # Global flags
