@@ -1,21 +1,21 @@
 # DuckLake Configuration File
-# Copy this file to ducklake.conf and modify as needed
-# Use with: ./ducklake-installer.sh --config ducklake.conf
+# Copy this file to ducklakekit.conf and modify as needed
+# Use with: ./ducklakekit-installer.sh --config ducklakekit.conf
 
 # Installation directory (absolute or relative path)
-INSTALL_DIR=./ducklake-example
+INSTALL_DIR=./ducklakekit-example
 
 # Instance name for this DuckLake setup (useful for multiple instances)
 INSTANCE_NAME=default
 
 # S3/MinIO bucket configuration
-BUCKET_NAME=ducklake-bucket
+BUCKET_NAME=ducklakekit-bucket
 DATA_PATH=data
 
 # PostgreSQL catalog database configuration
-DB_NAME=ducklake_catalog
-DB_USER=ducklake
-DB_PASS=ducklake123
+DB_NAME=ducklakekit_catalog
+DB_USER=ducklakekit
+DB_PASS=ducklakekit123
 
 # Port configuration (ensure these don't conflict with existing services)
 POSTGRES_PORT=5432
@@ -25,14 +25,14 @@ MINIO_CONSOLE_PORT=9001
 # Example configurations for different scenarios:
 
 # Development setup:
-# INSTALL_DIR=./ducklake-dev
+# INSTALL_DIR=./ducklakekit-dev
 # INSTANCE_NAME=dev
 # POSTGRES_PORT=5433
 # MINIO_PORT=9001
 # MINIO_CONSOLE_PORT=9002
 
 # Production setup:
-# INSTALL_DIR=/opt/ducklake
+# INSTALL_DIR=/opt/ducklakekit
 # INSTANCE_NAME=prod
 # DB_PASS=your_secure_password_here
 # POSTGRES_PORT=5432

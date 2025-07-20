@@ -3,9 +3,9 @@
 # DuckLake Complete Installer -  Version
 # Single-file installer for DuckLake with PostgreSQL catalog and MinIO storage
 #
-# Run with: curl -sSL https://your-server/ducklake-installer.sh | bash
+# Run with: curl -sSL https://your-server/ducklakekit-installer.sh | bash
 #
-# Usage: ./ducklake-gum [OPTIONS]
+# Usage: ./ducklakekit-gum [OPTIONS]
 # Options:
 #   --non-interactive    Run without prompts using defaults or config file
 #   --dry-run           Preview changes without executing them
@@ -47,7 +47,7 @@ CURL_CONNECT_TIMEOUT=10
 check_gum() {
     if ! command -v gum >/dev/null 2>&1; then
         echo "✕ Gum is required for this DuckLake."
-        echo "• Please install gum first or use the original script: ./ducklake.sh"
+        echo "• Please install gum first or use the original script: ./ducklakekit.sh"
         exit 1
     fi
 }
@@ -138,7 +138,7 @@ log_message() {
 # Setup logging
 setup_logging() {
     if [ "$DRY_RUN" = false ]; then
-        LOG_FILE="${INSTALL_DIR:-./ducklake}/ducklake-install.log"
+        LOG_FILE="${INSTALL_DIR:-./ducklakekit}/ducklakekit-install.log"
         mkdir -p "$(dirname "$LOG_FILE")"
         echo "DuckLake Installation Log - $(date)" > "$LOG_FILE"
         log_message "INFO" "Installation started with PID: $$"
@@ -202,21 +202,21 @@ retry_command() {
 }
 
 # Container management functions
-find_ducklake_containers() {
+find_ducklakekit_containers() {
     local instance_filter="$1"
-    local filter_pattern="ducklake-"
+    local filter_pattern="ducklakekit-"
 
     if [ -n "$instance_filter" ]; then
-        filter_pattern="ducklake-.*-${instance_filter}"
+        filter_pattern="ducklakekit-.*-${instance_filter}"
     fi
 
     podman ps -a --filter "name=${filter_pattern}" --format "{{.Names}}" 2>/dev/null | sort
 }
 
-find_ducklake_instances() {
+find_ducklakekit_instances() {
     # Find all unique instance names from container names
-    podman ps -a --filter "name=ducklake-" --format "{{.Names}}" 2>/dev/null | \
-        sed -n 's/ducklake-.*-\(.*\)/\1/p' | sort -u
+    podman ps -a --filter "name=ducklakekit-" --format "{{.Names}}" 2>/dev/null | \
+        sed -n 's/ducklakekit-.*-\(.*\)/\1/p' | sort -u
 }
 
 container_status() {
@@ -226,7 +226,7 @@ container_status() {
     echo
 
     local containers
-    containers=$(find_ducklake_containers "$instance_filter")
+    containers=$(find_ducklakekit_containers "$instance_filter")
 
     if [ -z "$containers" ]; then
         if [ -n "$instance_filter" ]; then
@@ -243,7 +243,7 @@ container_status() {
         fi
 
         local instances
-        instances=$(find_ducklake_instances)
+        instances=$(find_ducklakekit_instances)
         if [ -n "$instances" ]; then
             echo "$instances" | while read -r instance; do
                 if [ -n "$instance" ]; then
@@ -295,7 +295,7 @@ container_status() {
 
     # Show summary by instance
     local instances
-    instances=$(find_ducklake_instances)
+    instances=$(find_ducklakekit_instances)
     if [ -n "$instances" ]; then
         if command -v gum >/dev/null 2>&1; then
             gum style --foreground 33 --bold "Instance Summary:"
@@ -306,8 +306,8 @@ container_status() {
         echo "$instances" | while read -r instance; do
             if [ -n "$instance" ]; then
                 local running stopped
-                running=$(podman ps --filter "name=ducklake-.*-${instance}" --format "{{.Names}}" 2>/dev/null | wc -l)
-                stopped=$(podman ps -a --filter "name=ducklake-.*-${instance}" --format "{{.Names}}" 2>/dev/null | wc -l)
+                running=$(podman ps --filter "name=ducklakekit-.*-${instance}" --format "{{.Names}}" 2>/dev/null | wc -l)
+                stopped=$(podman ps -a --filter "name=ducklakekit-.*-${instance}" --format "{{.Names}}" 2>/dev/null | wc -l)
                 stopped=$((stopped - running))
 
                 if command -v gum >/dev/null 2>&1; then
@@ -336,7 +336,7 @@ container_start() {
     fi
 
     local containers
-    containers=$(find_ducklake_containers "$instance_filter")
+    containers=$(find_ducklakekit_containers "$instance_filter")
 
     if [ -z "$containers" ]; then
         if [ -n "$instance_filter" ]; then
@@ -399,7 +399,7 @@ container_stop() {
     fi
 
     local containers
-    containers=$(find_ducklake_containers "$instance_filter")
+    containers=$(find_ducklakekit_containers "$instance_filter")
 
     if [ -z "$containers" ]; then
         if [ -n "$instance_filter" ]; then
@@ -462,13 +462,13 @@ container_logs() {
 
     case "$service" in
         postgres|postgresql)
-            local container_pattern="ducklake-postgres"
+            local container_pattern="ducklakekit-postgres"
             ;;
         minio)
-            local container_pattern="ducklake-minio"
+            local container_pattern="ducklakekit-minio"
             ;;
         pgweb)
-            local container_pattern="ducklake-pgweb"
+            local container_pattern="ducklakekit-pgweb"
             ;;
         *)
             print_error "Unknown service: $service"
@@ -581,7 +581,7 @@ container_clean() {
 
     # Remove containers
     local containers
-    containers=$(find_ducklake_containers "$instance_filter")
+    containers=$(find_ducklakekit_containers "$instance_filter")
 
     if [ -n "$containers" ]; then
         echo
@@ -687,7 +687,7 @@ show_help() {
         print_step "# Non-interactive with defaults"
         gum style --foreground 240 "  $0 --non-interactive"
         print_step "# Use configuration file"
-        gum style --foreground 240 "  $0 --config ducklake.conf"
+        gum style --foreground 240 "  $0 --config ducklakekit.conf"
         print_step "# Container management"
         gum style --foreground 240 "  $0 --status                    # Show all containers"
         gum style --foreground 240 "  $0 --start prod                # Start 'prod' instance"
@@ -696,13 +696,13 @@ show_help() {
 
         gum style --foreground 33 --bold "CONFIGURATION FILE FORMAT:"
         gum style --foreground 240 --margin "0 2" \
-"INSTALL_DIR=./ducklake
+"INSTALL_DIR=./ducklakekit
 INSTANCE_NAME=default
-BUCKET_NAME=ducklake-bucket
+BUCKET_NAME=ducklakekit-bucket
 DATA_PATH=data
-DB_NAME=ducklake_catalog
-DB_USER=ducklake
-DB_PASS=ducklake123
+DB_NAME=ducklakekit_catalog
+DB_USER=ducklakekit
+DB_PASS=ducklakekit123
 POSTGRES_PORT=5432
 MINIO_PORT=9000
 MINIO_CONSOLE_PORT=9001"
@@ -736,7 +736,7 @@ EXAMPLES:
     $0 --non-interactive
 
     # Use configuration file
-    $0 --config ducklake.conf
+    $0 --config ducklakekit.conf
 
     # Preview installation
     $0 --dry-run
@@ -756,13 +756,13 @@ EXAMPLES:
     $0 --clean                     # Clean up all containers and volumes
 
 CONFIGURATION FILE FORMAT:
-    INSTALL_DIR=./ducklake
+    INSTALL_DIR=./ducklakekit
     INSTANCE_NAME=default
-    BUCKET_NAME=ducklake-bucket
+    BUCKET_NAME=ducklakekit-bucket
     DATA_PATH=data
-    DB_NAME=ducklake_catalog
-    DB_USER=ducklake
-    DB_PASS=ducklake123
+    DB_NAME=ducklakekit_catalog
+    DB_USER=ducklakekit
+    DB_PASS=ducklakekit123
     POSTGRES_PORT=5432
     MINIO_PORT=9000
     MINIO_CONSOLE_PORT=9001
@@ -1050,7 +1050,7 @@ load_config() {
 
     if [ ! -f "$config_file" ]; then
         print_error "Configuration file not found: $config_file"
-        print_error "Create one using the example: cp ducklake.conf.example ducklake.conf"
+        print_error "Create one using the example: cp ducklakekit.conf.example ducklakekit.conf"
         exit 1
     fi
 
@@ -1082,13 +1082,13 @@ get_user_config() {
         # Don't return early - we still need to create dir and cd
     elif [ "$NON_INTERACTIVE" = true ]; then
         # Set defaults for non-interactive mode
-        INSTALL_DIR=${INSTALL_DIR:-./ducklake}
+        INSTALL_DIR=${INSTALL_DIR:-./ducklakekit}
         INSTANCE_NAME=${INSTANCE_NAME:-default}
-        BUCKET_NAME=${BUCKET_NAME:-ducklake-bucket}
+        BUCKET_NAME=${BUCKET_NAME:-ducklakekit-bucket}
         DATA_PATH=${DATA_PATH:-data}
-        DB_NAME=${DB_NAME:-ducklake_catalog}
-        DB_USER=${DB_USER:-ducklake}
-        DB_PASS=${DB_PASS:-ducklake123}
+        DB_NAME=${DB_NAME:-ducklakekit_catalog}
+        DB_USER=${DB_USER:-ducklakekit}
+        DB_PASS=${DB_PASS:-ducklakekit123}
         POSTGRES_PORT=${POSTGRES_PORT:-5432}
         MINIO_PORT=${MINIO_PORT:-9000}
         MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT:-9001}
@@ -1101,26 +1101,26 @@ get_user_config() {
         if command -v gum >/dev/null 2>&1; then
             # Use gum for enhanced input
             print_step "Installation directory"
-            INSTALL_DIR=$(gum input --placeholder "./ducklake" --value "./ducklake")
+            INSTALL_DIR=$(gum input --placeholder "./ducklakekit" --value "./ducklakekit")
 
             print_step "Instance name"
             INSTANCE_NAME=$(gum input --placeholder "default" --value "default")
 
             print_step "S3 bucket name"
-            BUCKET_NAME=$(gum input --placeholder "ducklake-bucket" --value "ducklake-bucket")
+            BUCKET_NAME=$(gum input --placeholder "ducklakekit-bucket" --value "ducklakekit-bucket")
 
             print_step "Data path within bucket"
             DATA_PATH=$(gum input --placeholder "data" --value "data")
 
             print_step "Catalog database name"
-            DB_NAME=$(gum input --placeholder "ducklake_catalog" --value "ducklake_catalog")
+            DB_NAME=$(gum input --placeholder "ducklakekit_catalog" --value "ducklakekit_catalog")
 
             print_step "Database username"
-            DB_USER=$(gum input --placeholder "ducklake" --value "ducklake")
+            DB_USER=$(gum input --placeholder "ducklakekit" --value "ducklakekit")
 
             print_step "Database password"
-            DB_PASS=$(gum input --password --placeholder "ducklake123")
-            DB_PASS=${DB_PASS:-ducklake123}
+            DB_PASS=$(gum input --password --placeholder "ducklakekit123")
+            DB_PASS=${DB_PASS:-ducklakekit123}
 
             print_step "PostgreSQL port"
             POSTGRES_PORT=$(gum input --placeholder "5432" --value "5432")
@@ -1132,27 +1132,27 @@ get_user_config() {
             MINIO_CONSOLE_PORT=$(gum input --placeholder "9001" --value "9001")
         else
             # Fallback to standard prompts
-            read -p "Enter installation directory [./ducklake]: " INSTALL_DIR
-            INSTALL_DIR=${INSTALL_DIR:-./ducklake}
+            read -p "Enter installation directory [./ducklakekit]: " INSTALL_DIR
+            INSTALL_DIR=${INSTALL_DIR:-./ducklakekit}
 
             read -p "Enter instance name [default]: " INSTANCE_NAME
             INSTANCE_NAME=${INSTANCE_NAME:-default}
 
-            read -p "Enter S3 bucket name [ducklake-bucket]: " BUCKET_NAME
-            BUCKET_NAME=${BUCKET_NAME:-ducklake-bucket}
+            read -p "Enter S3 bucket name [ducklakekit-bucket]: " BUCKET_NAME
+            BUCKET_NAME=${BUCKET_NAME:-ducklakekit-bucket}
 
             read -p "Enter data path within bucket [data]: " DATA_PATH
             DATA_PATH=${DATA_PATH:-data}
 
-            read -p "Enter catalog database name [ducklake_catalog]: " DB_NAME
-            DB_NAME=${DB_NAME:-ducklake_catalog}
+            read -p "Enter catalog database name [ducklakekit_catalog]: " DB_NAME
+            DB_NAME=${DB_NAME:-ducklakekit_catalog}
 
-            read -p "Enter database username [ducklake]: " DB_USER
-            DB_USER=${DB_USER:-ducklake}
+            read -p "Enter database username [ducklakekit]: " DB_USER
+            DB_USER=${DB_USER:-ducklakekit}
 
-            read -s -p "Enter database password [ducklake123]: " DB_PASS
+            read -s -p "Enter database password [ducklakekit123]: " DB_PASS
             echo
-            DB_PASS=${DB_PASS:-ducklake123}
+            DB_PASS=${DB_PASS:-ducklakekit123}
 
             read -p "Enter PostgreSQL port [5432]: " POSTGRES_PORT
             POSTGRES_PORT=${POSTGRES_PORT:-5432}
@@ -1229,14 +1229,14 @@ get_server_ip() {
 }
 
 # Uninstall DuckLake
-uninstall_ducklake() {
+uninstall_ducklakekit() {
     print_status "Starting DuckLake uninstallation..."
 
     # Try to find existing installations
     local found_installations=:
 
     # Look for common installation directories
-    for dir in "./ducklake" "$HOME/ducklake" "/opt/ducklake"; do
+    for dir in "./ducklakekit" "$HOME/ducklakekit" "/opt/ducklakekit"; do
         if [ -d "$dir" ] && [ -f "$dir/pyproject.toml" ]; then
             found_installations+=("$dir")
         fi
@@ -1290,7 +1290,7 @@ uninstall_ducklake() {
 
         # Stop containers directly
         local containers
-        containers=$(find_ducklake_containers "${INSTANCE_NAME:-default}")
+        containers=$(find_ducklakekit_containers "${INSTANCE_NAME:-default}")
         if [ -n "$containers" ]; then
             echo "$containers" | while read -r container; do
                 if [ -n "$container" ]; then
@@ -1335,7 +1335,7 @@ version: '3.8'
 services:
   postgres:
     image: docker.io/library/postgres:15
-    container_name: ducklake-postgres-${INSTANCE_NAME}
+    container_name: ducklakekit-postgres-${INSTANCE_NAME}
     environment:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
@@ -1355,7 +1355,7 @@ services:
 
   minio:
     image: quay.io/minio/minio:latest
-    container_name: ducklake-minio-${INSTANCE_NAME}
+    container_name: ducklakekit-minio-${INSTANCE_NAME}
     command: server /data --console-address :9001
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -1369,9 +1369,9 @@ services:
 
   pgweb:
     image: docker.io/sosedoff/pgweb:latest
-    container_name: ducklake-pgweb-${INSTANCE_NAME}
+    container_name: ducklakekit-pgweb-${INSTANCE_NAME}
     environment:
-      PGWEB_DATABASE_URL: "postgresql://${DB_USER}:${DB_PASS}@ducklake-postgres-${INSTANCE_NAME}:5432/${DB_NAME}?sslmode=disable"
+      PGWEB_DATABASE_URL: "postgresql://${DB_USER}:${DB_PASS}@ducklakekit-postgres-${INSTANCE_NAME}:5432/${DB_NAME}?sslmode=disable"
     ports:
       - "8000:8081"
     depends_on:
@@ -1385,7 +1385,7 @@ volumes:
 
 networks:
   default:
-    name: ducklake-net-${INSTANCE_NAME}
+    name: ducklakekit-net-${INSTANCE_NAME}
 EOF
 
     # Create init.sql for PostgreSQL
@@ -1468,7 +1468,7 @@ conn.execute(f"""
             user=DB_USER
             password=DB_PASS
             host=SERVER_IP
-            port=POSTGRES_PORT' AS remote_ducklake
+            port=POSTGRES_PORT' AS remote_ducklakekit
             (DATA_PATH 's3://BUCKET_NAME/DATA_PATH_VALUE');
 """)
 
@@ -1477,7 +1477,7 @@ print("Connected to remote DuckLake!")
 
 # Example: Create a table and insert data
 conn.execute("""
-    CREATE TABLE IF NOT EXISTS remote_ducklake.test_table (
+    CREATE TABLE IF NOT EXISTS remote_ducklakekit.test_table (
         id INTEGER,
         name VARCHAR,
         timestamp TIMESTAMP
@@ -1485,12 +1485,12 @@ conn.execute("""
 """)
 
 conn.execute("""
-    INSERT INTO remote_ducklake.test_table (id, name, timestamp)
+    INSERT INTO remote_ducklakekit.test_table (id, name, timestamp)
     VALUES (1, 'Remote Test', CURRENT_TIMESTAMP), (2, 'DuckLake Demo', CURRENT_TIMESTAMP);
 """)
 
 # Query the data
-result = conn.execute("SELECT * FROM remote_ducklake.test_table").fetchall()
+result = conn.execute("SELECT * FROM remote_ducklakekit.test_table").fetchall()
 print("Data:", result)
 EOF
 
@@ -1649,7 +1649,7 @@ fi
 
 # Handle uninstall mode
 if [ "$UNINSTALL" = true ]; then
-    uninstall_ducklake
+    uninstall_ducklakekit
     exit 0
 fi
 
@@ -1926,9 +1926,9 @@ fi
 # Clean up existing installation if present
 cleanup_existing_installation() {
     local containers_to_remove=(
-        "ducklake-postgres-${INSTANCE_NAME}"
-        "ducklake-minio-${INSTANCE_NAME}"
-        "ducklake-pgweb-${INSTANCE_NAME}"
+        "ducklakekit-postgres-${INSTANCE_NAME}"
+        "ducklakekit-minio-${INSTANCE_NAME}"
+        "ducklakekit-pgweb-${INSTANCE_NAME}"
     )
 
     local volumes_to_remove=(
@@ -1936,7 +1936,7 @@ cleanup_existing_installation() {
         "minio_data_${INSTANCE_NAME}"
     )
 
-    local network_to_remove="ducklake-net-${INSTANCE_NAME}"
+    local network_to_remove="ducklakekit-net-${INSTANCE_NAME}"
 
     # Check if any containers exist
     local existing_containers=""
@@ -2011,11 +2011,11 @@ else
     fi
 
     # Create network
-    show_spinner "Creating container network" "podman network create ducklake-net-${INSTANCE_NAME} 2>/dev/null || true"
+    show_spinner "Creating container network" "podman network create ducklakekit-net-${INSTANCE_NAME} 2>/dev/null || true"
 
     # Start PostgreSQL
-    show_spinner "Starting PostgreSQL container" "podman run -d --name ducklake-postgres-${INSTANCE_NAME} --replace --restart=unless-stopped \
-        --network ducklake-net-${INSTANCE_NAME} $postgres_userns_flag \
+    show_spinner "Starting PostgreSQL container" "podman run -d --name ducklakekit-postgres-${INSTANCE_NAME} --replace --restart=unless-stopped \
+        --network ducklakekit-net-${INSTANCE_NAME} $postgres_userns_flag \
         -e POSTGRES_DB=${DB_NAME} \
         -e POSTGRES_USER=${DB_USER} \
         -e POSTGRES_PASSWORD=${DB_PASS} \
@@ -2026,8 +2026,8 @@ else
         docker.io/library/postgres:15 >/dev/null 2>&1"
 
     # Start MinIO
-    show_spinner "Starting MinIO container" "podman run -d --name ducklake-minio-${INSTANCE_NAME} --replace --restart=unless-stopped \
-        --network ducklake-net-${INSTANCE_NAME} $minio_userns_flag \
+    show_spinner "Starting MinIO container" "podman run -d --name ducklakekit-minio-${INSTANCE_NAME} --replace --restart=unless-stopped \
+        --network ducklakekit-net-${INSTANCE_NAME} $minio_userns_flag \
         -e MINIO_ROOT_USER=minioadmin \
         -e MINIO_ROOT_PASSWORD=minioadmin \
         -p ${MINIO_PORT}:9000 \
@@ -2036,9 +2036,9 @@ else
         quay.io/minio/minio:latest server /data --console-address :9001 >/dev/null 2>&1"
 
     # Start pgweb
-    show_spinner "Starting pgweb database UI" "podman run -d --name ducklake-pgweb-${INSTANCE_NAME} --replace --restart=unless-stopped \
-        --network ducklake-net-${INSTANCE_NAME} \
-        -e PGWEB_DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@ducklake-postgres-${INSTANCE_NAME}:5432/${DB_NAME}?sslmode=disable" \
+    show_spinner "Starting pgweb database UI" "podman run -d --name ducklakekit-pgweb-${INSTANCE_NAME} --replace --restart=unless-stopped \
+        --network ducklakekit-net-${INSTANCE_NAME} \
+        -e PGWEB_DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@ducklakekit-postgres-${INSTANCE_NAME}:5432/${DB_NAME}?sslmode=disable" \
         -p 8000:8081 \
         docker.io/sosedoff/pgweb:latest >/dev/null 2>&1"
 
@@ -2046,8 +2046,8 @@ else
     gum spin --spinner="dot" --title="Waiting for containers to initialize" -- sleep 3
 
     # Setup MinIO bucket
-    show_spinner "Creating MinIO bucket" "podman exec ducklake-minio-${INSTANCE_NAME} mc alias set local http://localhost:9000 minioadmin minioadmin >/dev/null 2>&1 && \
-        podman exec ducklake-minio-${INSTANCE_NAME} mc mb local/${BUCKET_NAME} >/dev/null 2>&1 || true"
+    show_spinner "Creating MinIO bucket" "podman exec ducklakekit-minio-${INSTANCE_NAME} mc alias set local http://localhost:9000 minioadmin minioadmin >/dev/null 2>&1 && \
+        podman exec ducklakekit-minio-${INSTANCE_NAME} mc mb local/${BUCKET_NAME} >/dev/null 2>&1 || true"
     success "All services started successfully"
 fi
 
@@ -2101,7 +2101,7 @@ check_service() {
 
 # Check services with better error handling and recovery suggestions
 check_postgres() {
-    if check_service "ducklake-postgres-${INSTANCE_NAME}" "postgres"; then
+    if check_service "ducklakekit-postgres-${INSTANCE_NAME}" "postgres"; then
         print_success "PostgreSQL is running and accepting connections"
     else
         print_error "PostgreSQL failed to start or is not accepting connections"
@@ -2115,13 +2115,13 @@ check_postgres() {
 
         print_step "Check PostgreSQL logs: $0 --logs postgres"
         print_step "Verify port $POSTGRES_PORT is not in use: ss -tuln | grep :$POSTGRES_PORT"
-        print_step "Check container status: podman ps -a --filter name=ducklake-postgres-${INSTANCE_NAME}"
+        print_step "Check container status: podman ps -a --filter name=ducklakekit-postgres-${INSTANCE_NAME}"
         print_step "Try restarting: $0 --restart"
 
         # Try to get more specific error information
-        if podman ps -a --filter name="ducklake-postgres-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
+        if podman ps -a --filter name="ducklakekit-postgres-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
             print_step "Container exited - check logs for startup errors"
-            podman logs "ducklake-postgres-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
+            podman logs "ducklakekit-postgres-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
         fi
 
         return 1
@@ -2129,7 +2129,7 @@ check_postgres() {
 }
 
 check_minio() {
-    if check_service "ducklake-minio-${INSTANCE_NAME}" "minio"; then
+    if check_service "ducklakekit-minio-${INSTANCE_NAME}" "minio"; then
         print_success "MinIO is running"
     else
         print_error "MinIO failed to start"
@@ -2143,13 +2143,13 @@ check_minio() {
 
         print_step "Check MinIO logs: $0 --logs minio"
         print_step "Verify ports $MINIO_PORT and $MINIO_CONSOLE_PORT are not in use"
-        print_step "Check container status: podman ps -a --filter name=ducklake-minio-${INSTANCE_NAME}"
+        print_step "Check container status: podman ps -a --filter name=ducklakekit-minio-${INSTANCE_NAME}"
         print_step "Try restarting: $0 --restart"
 
         # Try to get more specific error information
-        if podman ps -a --filter name="ducklake-minio-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
+        if podman ps -a --filter name="ducklakekit-minio-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
             print_step "Container exited - check logs for startup errors"
-            podman logs "ducklake-minio-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
+            podman logs "ducklakekit-minio-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
         fi
 
         return 1
@@ -2158,7 +2158,7 @@ check_minio() {
 
 # Check pgweb
 check_pgweb() {
-    if check_service "ducklake-pgweb-${INSTANCE_NAME}" "pgweb"; then
+    if check_service "ducklakekit-pgweb-${INSTANCE_NAME}" "pgweb"; then
         print_success "pgweb is running"
     else
         print_error "pgweb failed to start"
@@ -2172,13 +2172,13 @@ check_pgweb() {
 
         print_step "Check pgweb logs: $0 --logs pgweb"
         print_step "Verify port 8000 is not in use: ss -tuln | grep :8000"
-        print_step "Check container status: podman ps -a --filter name=ducklake-pgweb-${INSTANCE_NAME}"
+        print_step "Check container status: podman ps -a --filter name=ducklakekit-pgweb-${INSTANCE_NAME}"
         print_step "Try restarting: $0 --restart"
 
         # Try to get more specific error information
-        if podman ps -a --filter name="ducklake-pgweb-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
+        if podman ps -a --filter name="ducklakekit-pgweb-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
             print_step "Container exited - check logs for startup errors"
-            podman logs "ducklake-pgweb-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
+            podman logs "ducklakekit-pgweb-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
         fi
 
         return 1

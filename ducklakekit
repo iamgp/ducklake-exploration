@@ -14,13 +14,13 @@ export PATH="$HOME/.local/bin:$PATH"
 # Check if gum is available
 if command -v gum >/dev/null 2>&1; then
     # Gum is available, use the enhanced interface
-    exec "$SCRIPT_DIR/ducklake-gum" "$@"
+    exec "$SCRIPT_DIR/ducklakekit-gum" "$@"
 fi
 
 # Try to install gum if we can
 if command -v wget >/dev/null 2>&1 && command -v ar >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
     echo "• Installing Gum for enhanced interface..."
-    
+
     # Download and install gum
     if wget -q -O /tmp/gum.deb https://github.com/charmbracelet/gum/releases/download/v0.16.2/gum_0.16.2_amd64.deb 2>/dev/null; then
         mkdir -p ~/.local/bin
@@ -32,19 +32,11 @@ if command -v wget >/dev/null 2>&1 && command -v ar >/dev/null 2>&1 && command -
         rm -f control.tar.gz data.tar.gz debian-binary _gpgorigin 2>/dev/null
         rm -rf etc usr 2>/dev/null
         cd "$SCRIPT_DIR"
-        
+
         # Check if installation worked
         if command -v gum >/dev/null 2>&1; then
             echo "✓ Gum installed successfully! Using enhanced interface..."
-            exec "$SCRIPT_DIR/ducklake-gum" "$@"
+            exec "$SCRIPT_DIR/ducklakekit-gum" "$@"
         fi
     fi
 fi
-
-# Fall back to original interface
-echo "• Using original command-line interface"
-echo "• For enhanced interface, install gum: https://github.com/charmbracelet/gum"
-echo
-
-# Use the original script as fallback
-exec "$SCRIPT_DIR/ducklake-original.sh" "$@"

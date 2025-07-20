@@ -1,58 +1,75 @@
-# DuckLake Installer & Container Manager
+# @ducklakekit
 
-A comprehensive installer and management tool for DuckLake with PostgreSQL catalog and MinIO object storage. Single-file installer that handles everything from initial setup to ongoing container management.
+A modern, interactive installer and management tool for DuckLake with PostgreSQL catalog and MinIO object storage. Features an enhanced terminal interface powered by [gum](https://github.com/charmbracelet/gum) with automatic fallback to a standard command-line interface.
 
 ## Quick Start
 
 ### Installation
 ```bash
-# Interactive installation
-curl -sSL https://your-server/ducklake-installer.sh | bash
+# Interactive installation with enhanced interface
+./ducklakekit
 
-# Or download and run locally
-wget https://your-server/ducklake-installer.sh
-chmod +x ducklake-installer.sh
-./ducklake-installer.sh
+# Or use the direct gum interface
+./ducklakekit-gum
+
+# Non-interactive installation
+./ducklakekit --non-interactive
 ```
 
 ### Container Management
 ```bash
 # Check status
-./ducklake-installer.sh --status
+./ducklakekit --status
 
 # Start/stop services
-./ducklake-installer.sh --start
-./ducklake-installer.sh --stop
+./ducklakekit --start
+./ducklakekit --stop
 
 # View logs
-./ducklake-installer.sh --logs postgres
+./ducklakekit --logs postgres
+./ducklakekit --logs minio
 ```
+
+## New Enhanced Interface
+
+@ducklakekit now features a smart launcher that automatically ensures you have the best available interface:
+
+- **Enhanced Interface**: Uses gum for beautiful, interactive menus and forms
+- **Auto-Installation**: Automatically downloads and installs gum when possible
+- **Gum Required**: Requires gum for the enhanced interactive experience
+- **Consistent Styling**: Follows YADL style guidelines with DuckLake's signature yellow theme
+
+### Interface Detection Flow
+1. Checks if `gum` is available in PATH
+2. If not available, attempts automatic installation
+3. If installation succeeds, launches enhanced interface
+4. If installation fails, provides helpful installation instructions
 
 ## Installation Options
 
 ### Interactive Mode (Default)
 ```bash
-./ducklake-installer.sh
+./ducklakekit
 ```
-Prompts for all configuration options with sensible defaults.
+Beautiful interactive interface with guided setup and real-time validation.
 
 ### Non-Interactive Mode
 ```bash
-./ducklake-installer.sh --non-interactive
+./ducklakekit --non-interactive
 ```
-Uses default values, perfect for automation and CI/CD.
+Uses default values or configuration file, perfect for automation and CI/CD.
 
 ### Configuration File
 ```bash
-# Create config file
-cp ducklake.conf.example ducklake.conf
-# Edit ducklake.conf with your settings
-./ducklake-installer.sh --config ducklake.conf
+# Copy example configuration
+cp ducklakekit.conf.example ducklakekit.conf
+# Edit ducklakekit.conf with your settings
+./ducklakekit --config ducklakekit.conf
 ```
 
 ### Dry Run Mode
 ```bash
-./ducklake-installer.sh --dry-run
+./ducklakekit --dry-run
 ```
 Preview all changes without executing them.
 
@@ -61,58 +78,58 @@ Preview all changes without executing them.
 ### Status & Monitoring
 ```bash
 # Show all DuckLake containers
-./ducklake-installer.sh --status
+./ducklakekit --status
 
 # Show specific instance
-./ducklake-installer.sh --status prod
+./ducklakekit --status prod
 
 # View real-time logs
-./ducklake-installer.sh --logs postgres
-./ducklake-installer.sh --logs minio
+./ducklakekit --logs postgres
+./ducklakekit --logs minio
 ```
 
 ### Service Control
 ```bash
 # Start all containers
-./ducklake-installer.sh --start
+./ducklakekit --start
 
 # Start specific instance
-./ducklake-installer.sh --start dev
+./ducklakekit --start dev
 
 # Stop all containers
-./ducklake-installer.sh --stop
+./ducklakekit --stop
 
-# Stop specific instance
-./ducklake-installer.sh --stop prod
+# Stop specific instance  
+./ducklakekit --stop prod
 
 # Restart containers
-./ducklake-installer.sh --restart
-./ducklake-installer.sh --restart test
+./ducklakekit --restart
+./ducklakekit --restart test
 ```
 
 ### Cleanup & Maintenance
 ```bash
 # Remove containers and volumes
-./ducklake-installer.sh --clean
+./ducklakekit --clean
 
 # Clean specific instance
-./ducklake-installer.sh --clean dev
+./ducklakekit --clean dev
 
 # Complete uninstall
-./ducklake-installer.sh --uninstall
+./ducklakekit --uninstall
 ```
 
 ## Configuration
 
 ### Default Configuration
 ```bash
-INSTALL_DIR=./ducklake
+INSTALL_DIR=./ducklakekit
 INSTANCE_NAME=default
-BUCKET_NAME=ducklake-bucket
+BUCKET_NAME=ducklakekit-bucket
 DATA_PATH=data
-DB_NAME=ducklake_catalog
-DB_USER=ducklake
-DB_PASS=ducklake123
+DB_NAME=ducklakekit_catalog
+DB_USER=ducklakekit
+DB_PASS=ducklakekit123
 POSTGRES_PORT=5432
 MINIO_PORT=9000
 MINIO_CONSOLE_PORT=9001
@@ -123,14 +140,14 @@ Run multiple DuckLake instances with different configurations:
 
 ```bash
 # Production instance
-INSTANCE_NAME=prod POSTGRES_PORT=5432 ./ducklake-installer.sh --non-interactive
+INSTANCE_NAME=prod POSTGRES_PORT=5432 ./ducklakekit --non-interactive
 
 # Development instance  
-INSTANCE_NAME=dev POSTGRES_PORT=5433 MINIO_PORT=9002 ./ducklake-installer.sh --non-interactive
+INSTANCE_NAME=dev POSTGRES_PORT=5433 MINIO_PORT=9002 ./ducklakekit --non-interactive
 
 # Manage instances separately
-./ducklake-installer.sh --status prod
-./ducklake-installer.sh --restart dev
+./ducklakekit --status prod
+./ducklakekit --restart dev
 ```
 
 ## Prerequisites
@@ -138,9 +155,10 @@ INSTANCE_NAME=dev POSTGRES_PORT=5433 MINIO_PORT=9002 ./ducklake-installer.sh --n
 The installer automatically handles prerequisites:
 
 - **Python 3.10+** - Auto-detects and provides installation instructions
-- **Podman** - Auto-installs on Ubuntu/Debian/RHEL/CentOS/Fedora
+- **Podman** - Auto-installs on Ubuntu/Debian/RHEL/CentOS/Fedora  
 - **UV Package Manager** - Auto-downloads and installs
 - **User Namespaces** - Auto-configures for rootless podman
+- **Gum (Optional)** - Auto-installs for enhanced interface
 
 ## Architecture
 
@@ -159,9 +177,9 @@ The installer automatically handles prerequisites:
 
 ### PostgreSQL Catalog
 - **Purpose**: Stores table metadata, schemas, and transaction logs
-- **Database**: `ducklake_catalog` 
+- **Database**: `ducklakekit_catalog` 
 - **Default Port**: `5432`
-- **Credentials**: `ducklake` / `ducklake123`
+- **Credentials**: `ducklakekit` / `ducklakekit123`
 
 ### MinIO Object Storage
 - **Purpose**: Stores actual data files (Parquet format)
@@ -198,17 +216,17 @@ conn.execute("""
 
 # Connect to DuckLake
 conn.execute("""
-    ATTACH 'ducklake:postgres:dbname=ducklake_catalog
-            user=ducklake  
-            password=ducklake123
+    ATTACH 'ducklake:postgres:dbname=ducklakekit_catalog
+            user=ducklakekit  
+            password=ducklakekit123
             host=localhost
-            port=5432' AS ducklake_demo
-            (DATA_PATH 's3://ducklake-bucket/data');
+            port=5432' AS ducklakekit_demo
+            (DATA_PATH 's3://ducklakekit-bucket/data');
 """)
 
 # Create and query tables
 conn.execute("""
-    CREATE TABLE ducklake_demo.sales (
+    CREATE TABLE ducklakekit_demo.sales (
         id INTEGER,
         product VARCHAR,
         amount DECIMAL(10,2),
@@ -227,16 +245,23 @@ conn.execute("""
 """)
 
 conn.execute("""
-    ATTACH 'ducklake:postgres:dbname=ducklake_catalog
-            user=ducklake  
-            password=ducklake123
+    ATTACH 'ducklake:postgres:dbname=ducklakekit_catalog
+            user=ducklakekit  
+            password=ducklakekit123
             host=YOUR_SERVER_IP
-            port=5432' AS ducklake_demo
-            (DATA_PATH 's3://ducklake-bucket/data');
+            port=5432' AS ducklakekit_demo
+            (DATA_PATH 's3://ducklakekit-bucket/data');
 """)
 ```
 
 ## Features
+
+### Enhanced Interface Features
+- ✅ **Interactive Menus** - Gum-powered selection and input forms
+- ✅ **Auto-Installation** - Automatically installs gum when possible
+- ✅ **Smart Fallback** - Seamless fallback to command-line interface
+- ✅ **Consistent Styling** - YADL style guide with DuckLake yellow theme
+- ✅ **Progress Indicators** - Real-time progress and status updates
 
 ### Installation Features
 - ✅ **Single-file installer** - No dependencies to download
@@ -261,13 +286,27 @@ conn.execute("""
 
 ## Troubleshooting
 
+### Interface Issues
+```bash
+# Install gum manually for enhanced interface
+# Ubuntu/Debian
+wget https://github.com/charmbracelet/gum/releases/download/v0.16.2/gum_0.16.2_amd64.deb
+sudo dpkg -i gum_0.16.2_amd64.deb
+
+# Use gum interface directly
+./ducklakekit-gum
+
+# Check gum installation
+command -v gum && echo "Gum available" || echo "Gum not found"
+```
+
 ### Installation Issues
 ```bash
 # Check installation log
-cat ./ducklake/ducklake-install.log
+cat ./ducklakekit/ducklakekit-install.log
 
 # Validate configuration
-./ducklake-installer.sh --dry-run --config ducklake.conf
+./ducklakekit --dry-run --config ducklakekit.conf
 
 # Test podman setup
 podman info
@@ -276,14 +315,14 @@ podman info
 ### Service Issues
 ```bash
 # Check container status
-./ducklake-installer.sh --status
+./ducklakekit --status
 
 # View service logs
-./ducklake-installer.sh --logs postgres
-./ducklake-installer.sh --logs minio
+./ducklakekit --logs postgres
+./ducklakekit --logs minio
 
 # Restart services
-./ducklake-installer.sh --restart
+./ducklakekit --restart
 ```
 
 ### Port Conflicts
@@ -293,68 +332,30 @@ ss -tuln | grep :5432
 ss -tuln | grep :9000
 
 # Use different ports
-POSTGRES_PORT=5433 MINIO_PORT=9002 ./ducklake-installer.sh --non-interactive
+POSTGRES_PORT=5433 MINIO_PORT=9002 ./ducklakekit --non-interactive
 ```
 
 ### Complete Reset
 ```bash
 # Clean everything and reinstall
-./ducklake-installer.sh --clean
-./ducklake-installer.sh --non-interactive
-```
-
-### Network Issues
-```bash
-# Test registry access
-curl -I https://registry-1.docker.io
-
-# Test with proxy
-HTTP_PROXY=http://proxy:8080 ./ducklake-installer.sh
-
-# Manual container pull
-podman pull docker.io/library/postgres:15
+./ducklakekit --clean
+./ducklakekit --non-interactive
 ```
 
 ## Advanced Usage
 
 ### CI/CD Integration
 ```bash
-# Automated deployment
-curl -sSL https://your-server/ducklake-installer.sh | bash -s -- --non-interactive
+# Automated deployment (installs gum if needed)
+./ducklakekit --non-interactive
+
+# Use gum interface directly if gum is pre-installed
+./ducklakekit-gum --non-interactive
 
 # With custom config
 echo "INSTANCE_NAME=ci-test" > ci.conf
 echo "POSTGRES_PORT=5433" >> ci.conf
-./ducklake-installer.sh --config ci.conf --non-interactive
-```
-
-### Docker Compose Alternative
-The installer creates equivalent functionality to this docker-compose.yml:
-
-```yaml
-services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: ducklake_catalog
-      POSTGRES_USER: ducklake
-      POSTGRES_PASSWORD: ducklake123
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-  minio:
-    image: quay.io/minio/minio:latest
-    command: server /data --console-address :9001
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
+./ducklakekit --config ci.conf --non-interactive
 ```
 
 ### Production Considerations
@@ -369,9 +370,22 @@ services:
 
 ```bash
 # Show all available options
-./ducklake-installer.sh --help
+./ducklakekit --help
 
 # Get version information
-./ducklake-installer.sh --status
+./ducklakekit --status
+
+# Install gum for enhanced interface
+# Visit: https://github.com/charmbracelet/gum
 ```
 
+## File Structure
+
+```
+ducklakekit/
+├── ducklakekit                 # Smart launcher (installs gum if needed)
+├── ducklakekit-gum            # Enhanced gum interface
+└── ducklakekit.conf.example   # Configuration template
+```
+
+The launcher automatically installs gum when needed and provides the enhanced interactive experience. All functionality is now powered by the gum interface for consistency and improved user experience.
