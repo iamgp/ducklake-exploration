@@ -467,15 +467,15 @@ container_logs() {
         minio)
             local container_pattern="ducklake-minio"
             ;;
-        mathesar)
-            local container_pattern="ducklake-mathesar"
+        pgweb)
+            local container_pattern="ducklake-pgweb"
             ;;
         *)
             print_error "Unknown service: $service"
             if command -v gum >/dev/null 2>&1; then
-                gum style --foreground 33 "Available services: postgres, minio, mathesar"
+                gum style --foreground 33 "Available services: postgres, minio, pgweb"
             else
-                echo "Available services: postgres, minio, mathesar"
+                echo "Available services: postgres, minio, pgweb"
             fi
             return 1
             ;;
@@ -1367,42 +1367,21 @@ services:
       - minio_data_${INSTANCE_NAME}:/data
     restart: unless-stopped
 
-  mathesar:
-    image: docker.io/mathesar/mathesar:latest
-    container_name: ducklake-mathesar-${INSTANCE_NAME}
+  pgweb:
+    image: docker.io/sosedoff/pgweb:latest
+    container_name: ducklake-pgweb-${INSTANCE_NAME}
     environment:
-      SECRET_KEY: ducklake-secret-key-change-in-production
-      DOMAIN_NAME: http://localhost:8000
-      POSTGRES_DB: ${DB_NAME}
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASS}
-      POSTGRES_HOST: ducklake-postgres-${INSTANCE_NAME}
-      POSTGRES_PORT: 5432
-      DJANGO_SETTINGS_MODULE: config.settings.production
-      ALLOWED_HOSTS: "*"
-      DEBUG: false
-      MATHESAR_DATABASES: "ducklake_catalog|postgresql://${DB_USER}:${DB_PASS}@ducklake-postgres-${INSTANCE_NAME}:5432/${DB_NAME}"
+      PGWEB_DATABASE_URL: "postgresql://${DB_USER}:${DB_PASS}@ducklake-postgres-${INSTANCE_NAME}:5432/${DB_NAME}?sslmode=disable"
     ports:
-      - "8000:8000"
-    volumes:
-      - mathesar_static_${INSTANCE_NAME}:/code/static
-      - mathesar_media_${INSTANCE_NAME}:/code/media
+      - "8000:8081"
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
 volumes:
   postgres_data_${INSTANCE_NAME}:
   minio_data_${INSTANCE_NAME}:
-  mathesar_static_${INSTANCE_NAME}:
-  mathesar_media_${INSTANCE_NAME}:
 
 networks:
   default:
@@ -1949,14 +1928,12 @@ cleanup_existing_installation() {
     local containers_to_remove=(
         "ducklake-postgres-${INSTANCE_NAME}"
         "ducklake-minio-${INSTANCE_NAME}"
-        "ducklake-mathesar-${INSTANCE_NAME}"
+        "ducklake-pgweb-${INSTANCE_NAME}"
     )
 
     local volumes_to_remove=(
         "postgres_data_${INSTANCE_NAME}"
         "minio_data_${INSTANCE_NAME}"
-        "mathesar_static_${INSTANCE_NAME}"
-        "mathesar_media_${INSTANCE_NAME}"
     )
 
     local network_to_remove="ducklake-net-${INSTANCE_NAME}"
@@ -1984,8 +1961,8 @@ cleanup_existing_installation() {
         if [ -n "$existing_containers" ]; then
             show_spinner "Removing existing containers" "
                 for container in $existing_containers; do
-                    podman stop \"\$container\" 2>/dev/null || true
-                    podman rm \"\$container\" 2>/dev/null || true
+                    podman stop \$container 2>/dev/null || true
+                    podman rm \$container 2>/dev/null || true
                 done
             "
         fi
@@ -1993,14 +1970,14 @@ cleanup_existing_installation() {
         if [ -n "$existing_volumes" ]; then
             show_spinner "Removing existing volumes" "
                 for volume in $existing_volumes; do
-                    podman volume rm \"\$volume\" 2>/dev/null || true
+                    podman volume rm \$volume 2>/dev/null || true
                 done
             "
         fi
 
         # Remove network if it exists
         if podman network ls --format "{{.Name}}" | grep -q "^${network_to_remove}$"; then
-            show_spinner "Removing network" "podman network rm \"$network_to_remove\" 2>/dev/null || true"
+            show_spinner "Removing network" "podman network rm $network_to_remove 2>/dev/null || true"
         fi
 
         success "Previous installation cleaned up"
@@ -2018,7 +1995,7 @@ if [ "$DRY_RUN" = true ]; then
     show_spinner "Creating container network" "sleep 0.5"
     show_spinner "Starting PostgreSQL container" "sleep 0.5"
     show_spinner "Starting MinIO container" "sleep 0.5"
-    show_spinner "Starting Mathesar web UI" "sleep 0.5"
+    show_spinner "Starting pgweb database UI" "sleep 0.5"
     show_spinner "Waiting for containers to initialize" "sleep 0.5"
     show_spinner "Creating MinIO bucket" "sleep 0.5"
     success "All services started successfully"
@@ -2058,24 +2035,12 @@ else
         -v minio_data_${INSTANCE_NAME}:/data \
         quay.io/minio/minio:latest server /data --console-address :9001 >/dev/null 2>&1"
 
-    # Start Mathesar
-    show_spinner "Starting Mathesar web UI" "podman run -d --name ducklake-mathesar-${INSTANCE_NAME} --replace --restart=unless-stopped \
+    # Start pgweb
+    show_spinner "Starting pgweb database UI" "podman run -d --name ducklake-pgweb-${INSTANCE_NAME} --replace --restart=unless-stopped \
         --network ducklake-net-${INSTANCE_NAME} \
-        -e SECRET_KEY=ducklake-secret-key-change-in-production \
-        -e DOMAIN_NAME=http://localhost:8000 \
-        -e POSTGRES_DB=${DB_NAME} \
-        -e POSTGRES_USER=${DB_USER} \
-        -e POSTGRES_PASSWORD=${DB_PASS} \
-        -e POSTGRES_HOST=ducklake-postgres-${INSTANCE_NAME} \
-        -e POSTGRES_PORT=5432 \
-        -e DJANGO_SETTINGS_MODULE=config.settings.production \
-        -e ALLOWED_HOSTS='*' \
-        -e DEBUG=false \
-        -e MATHESAR_DATABASES='ducklake_catalog|postgresql://${DB_USER}:${DB_PASS}@ducklake-postgres-${INSTANCE_NAME}:5432/${DB_NAME}' \
-        -p 8000:8000 \
-        -v mathesar_static_${INSTANCE_NAME}:/code/static \
-        -v mathesar_media_${INSTANCE_NAME}:/code/media \
-        docker.io/mathesar/mathesar:latest >/dev/null 2>&1"
+        -e PGWEB_DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@ducklake-postgres-${INSTANCE_NAME}:5432/${DB_NAME}?sslmode=disable" \
+        -p 8000:8081 \
+        docker.io/sosedoff/pgweb:latest >/dev/null 2>&1"
 
     # Wait for containers to initialize
     gum spin --spinner="dot" --title="Waiting for containers to initialize" -- sleep 3
@@ -2191,12 +2156,12 @@ check_minio() {
     fi
 }
 
-# Check Mathesar
-check_mathesar() {
-    if check_service "ducklake-mathesar-${INSTANCE_NAME}" "mathesar"; then
-        print_success "Mathesar is running"
+# Check pgweb
+check_pgweb() {
+    if check_service "ducklake-pgweb-${INSTANCE_NAME}" "pgweb"; then
+        print_success "pgweb is running"
     else
-        print_error "Mathesar failed to start"
+        print_error "pgweb failed to start"
         echo ""
 
         if command -v gum >/dev/null 2>&1; then
@@ -2205,15 +2170,15 @@ check_mathesar() {
             echo "Troubleshooting steps:"
         fi
 
-        print_step "Check Mathesar logs: $0 --logs mathesar"
+        print_step "Check pgweb logs: $0 --logs pgweb"
         print_step "Verify port 8000 is not in use: ss -tuln | grep :8000"
-        print_step "Check container status: podman ps -a --filter name=ducklake-mathesar-${INSTANCE_NAME}"
+        print_step "Check container status: podman ps -a --filter name=ducklake-pgweb-${INSTANCE_NAME}"
         print_step "Try restarting: $0 --restart"
 
         # Try to get more specific error information
-        if podman ps -a --filter name="ducklake-mathesar-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
+        if podman ps -a --filter name="ducklake-pgweb-${INSTANCE_NAME}" --format "{{.Status}}" | grep -q "Exited"; then
             print_step "Container exited - check logs for startup errors"
-            podman logs "ducklake-mathesar-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
+            podman logs "ducklake-pgweb-${INSTANCE_NAME}" 2>/dev/null | tail -10 || true
         fi
 
         return 1
@@ -2234,8 +2199,8 @@ if ! check_minio; then
     exit 1
 fi
 
-show_spinner "Checking Mathesar health" "sleep 3"
-if ! check_mathesar; then
+show_spinner "Checking pgweb health" "sleep 3"
+if ! check_pgweb; then
     exit 1
 fi
 
@@ -2263,7 +2228,7 @@ section "Services Status"
 muted "  PostgreSQL Catalog: $SERVER_IP:$POSTGRES_PORT"
 muted "  MinIO Object Storage: $SERVER_IP:$MINIO_PORT"
 muted "  MinIO Web Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT"
-muted "  Mathesar Database UI: http://$SERVER_IP:8000"
+muted "  pgweb Database UI: http://$SERVER_IP:8000"
 
 separator
 section "Credentials"
@@ -2271,18 +2236,16 @@ muted "  PostgreSQL: ${DB_USER} / ${DB_PASS}"
 muted "  MinIO: minioadmin / minioadmin"
 
 separator
-section "Mathesar Database Setup"
-muted "  When adding database connection in Mathesar, use these settings:"
-muted "  Host: $SERVER_IP"
-muted "  Port: $POSTGRES_PORT"
-muted "  Database Name: $DB_NAME"
-muted "  Role Name: $DB_USER"
-muted "  Password: $DB_PASS"
+section "pgweb Database Access"
+muted "  pgweb automatically connects to your DuckLake database"
+muted "  Access at: http://$SERVER_IP:8000"
+muted "  No additional setup required!"
 
 separator
 section "Remote Connection Code"
 success "Python connection script: ${INSTALL_DIR}/connect.py"
-muted "  Run: cd ${INSTALL_DIR} && python connect.py"
+muted "  Run with uv: uv run --with duckdb --with psycopg2-binary python ${INSTALL_DIR}/connect.py"
+muted "  Or with python: cd ${INSTALL_DIR} && python connect.py"
 
 separator
 section "Server Management Commands"
@@ -2295,7 +2258,7 @@ muted "  Cleanup:   $0 --clean"
 separator
 section "Web Interfaces"
 muted "  MinIO Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT (minioadmin/minioadmin)"
-muted "  Mathesar Database UI: http://$SERVER_IP:8000"
+muted "  pgweb Database UI: http://$SERVER_IP:8000"
 
 separator
 section "Installation Directory"
