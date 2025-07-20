@@ -104,6 +104,28 @@ print_step() {
     info "$1"
 }
 
+# Show a spinner during operations
+show_spinner() {
+    local message="$1"
+    local command="$2"
+
+    if [ "$DRY_RUN" = true ]; then
+        info "[DRY RUN] $message"
+        return 0
+    fi
+
+    # Create a temporary script to avoid function scoping issues
+    local temp_script=$(mktemp)
+    echo "#!/bin/bash" > "$temp_script"
+    echo "$command" >> "$temp_script"
+    chmod +x "$temp_script"
+
+    gum spin --spinner="dot" --title="$message" -- "$temp_script"
+    local result=$?
+    rm -f "$temp_script"
+    return $result
+}
+
 # Logging function
 log_message() {
     local level="$1"
@@ -955,7 +977,6 @@ validate_name() {
 
 validate_config() {
     local errors=0
-    
     print_status "Validating configuration..."
     
     # Validate paths
@@ -1168,7 +1189,6 @@ get_user_config() {
         exit 1
     fi
     
-    echo
     print_success "Configuration summary:"
     if command -v gum >/dev/null 2>&1; then
         gum style --foreground 240 "  Installation: $INSTALL_DIR"
@@ -1189,7 +1209,6 @@ get_user_config() {
         echo "  MinIO Port: $MINIO_PORT"
         echo "  MinIO Console Port: $MINIO_CONSOLE_PORT"
     fi
-    echo
 }
 
 # Get server IP for remote connections
@@ -1441,6 +1460,72 @@ BUCKET_NAME=${BUCKET_NAME}
 DATA_PATH=${DATA_PATH}
 EOF
 
+    # Create Python connection script
+    cat > connect.py << 'EOF'
+import duckdb
+
+# Connect to DuckDB
+conn = duckdb.connect()
+
+# Install required extensions
+conn.execute("INSTALL ducklake")
+conn.execute("INSTALL postgres") 
+conn.execute("INSTALL httpfs")
+conn.execute("LOAD ducklake")
+conn.execute("LOAD postgres")
+conn.execute("LOAD httpfs")
+
+# Configure S3 connection to your MinIO server
+conn.execute(f"""
+    SET s3_region='us-east-1';
+    SET s3_access_key_id='minioadmin';
+    SET s3_secret_access_key='minioadmin';
+    SET s3_endpoint='SERVER_IP:MINIO_PORT';
+    SET s3_use_ssl=false;
+    SET s3_url_style='path';
+""")
+
+# Connect to your DuckLake server
+conn.execute(f"""
+    ATTACH 'ducklake:postgres:dbname=DB_NAME
+            user=DB_USER  
+            password=DB_PASS
+            host=SERVER_IP
+            port=POSTGRES_PORT' AS remote_ducklake
+            (DATA_PATH 's3://BUCKET_NAME/DATA_PATH');
+""")
+
+# Test the connection
+print("Connected to remote DuckLake!")
+
+# Example: Create a table and insert data
+conn.execute("""
+    CREATE TABLE IF NOT EXISTS remote_ducklake.test_table (
+        id INTEGER,
+        name VARCHAR,
+        timestamp TIMESTAMP
+    );
+""")
+
+conn.execute("""
+    INSERT INTO remote_ducklake.test_table (id, name, timestamp) 
+    VALUES (1, 'Remote Test', CURRENT_TIMESTAMP), (2, 'DuckLake Demo', CURRENT_TIMESTAMP);
+""")
+
+# Query the data
+result = conn.execute("SELECT * FROM remote_ducklake.test_table").fetchall()
+print("Data:", result)
+EOF
+
+    # Replace placeholders with actual values
+    sed -i "s/SERVER_IP/$SERVER_IP/g" connect.py
+    sed -i "s/MINIO_PORT/$MINIO_PORT/g" connect.py
+    sed -i "s/DB_NAME/$DB_NAME/g" connect.py
+    sed -i "s/DB_USER/$DB_USER/g" connect.py
+    sed -i "s/DB_PASS/$DB_PASS/g" connect.py
+    sed -i "s/POSTGRES_PORT/$POSTGRES_PORT/g" connect.py
+    sed -i "s/BUCKET_NAME/$BUCKET_NAME/g" connect.py
+    sed -i "s/DATA_PATH/$DATA_PATH/g" connect.py
 
     print_success "Configuration files created"
 }
@@ -1602,13 +1687,16 @@ fi
 echo ""
 
 # Get user configuration
+separator
+section "Loading Configuration"
 get_user_config
 
 # Setup logging after we know the install directory
 setup_logging
 
 # Check prerequisites
-print_status "Checking prerequisites..."
+separator
+section "Checking Prerequisites"
 
 # Check if running as root (not recommended for podman)
 if [ "$EUID" -eq 0 ]; then
@@ -1617,37 +1705,7 @@ if [ "$EUID" -eq 0 ]; then
 fi
 
 # Check Python version with enhanced error messages
-check_python() {
-    if ! command_exists python3; then
-        print_warning "Python 3 not found in system PATH"
-        print_step "UV will manage Python installation automatically"
-        return 0
-    fi
-    
-    local python_version
-    python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))' 2>/dev/null)
-    
-    if [ -z "$python_version" ]; then
-        print_warning "Failed to determine Python version, UV will handle Python setup"
-        return 0
-    fi
-    
-    local python_major python_minor
-    python_major=$(echo "$python_version" | cut -d. -f1)
-    python_minor=$(echo "$python_version" | cut -d. -f2)
-    
-    if [ "$python_major" -ge 3 ] && [ "$python_minor" -ge 10 ]; then
-        print_success "Python $python_version found"
-        log_message "INFO" "Python version: $python_version"
-        return 0
-    else
-        print_warning "Python 3.10+ preferred. Found: $python_version"
-        print_step "UV will manage Python version automatically"
-        return 0
-    fi
-}
-
-check_python
+# Python not needed for container-based DuckLake
 
 # Install podman if needed
 install_podman
@@ -1836,46 +1894,11 @@ test_registry_access
 DUCKLAKE_DIR="$INSTALL_DIR"
 
 # Create all configuration files
+separator
+section "Creating Configuration Files"
 create_files
 
-# Install Python dependencies with error handling
-install_python_deps() {
-    if [ "$DRY_RUN" = true ]; then
-        print_status "[DRY RUN] Would install Python dependencies"
-        return 0
-    fi
-    
-    print_status "Installing Python dependencies..."
-    
-    # Python dependencies are not needed for container-based DuckLake
-    print_success "Container-based installation - no Python dependencies needed"
-    return 0
-    
-    # The following Python installation code is disabled as it's not needed
-    if false; then
-        print_error "Failed to install Python dependencies"
-        echo ""
-        
-        if command -v gum >/dev/null 2>&1; then
-            gum style --foreground 240 "Troubleshooting steps:"
-        else
-            echo "Troubleshooting steps:"
-        fi
-        
-        print_step "Check internet connection"
-        print_step "Try manual installation: cd $INSTALL_DIR && uv sync"
-        print_step "Check UV configuration: uv --version"
-        print_step "Clear UV cache: uv cache clean"
-        return 1
-    fi
-    
-    print_success "Python dependencies installed"
-    return 0
-}
-
-if ! install_python_deps; then
-    exit 1
-fi
+# No Python dependencies needed for container-based DuckLake
 
 # Check for port conflicts
 print_status "Checking for port conflicts..."
@@ -1919,14 +1942,89 @@ if [ -n "$CONFLICTING_CONTAINERS" ]; then
         print_error "Cannot continue with port conflicts"
         exit 1
     fi
+else
+    print_success "No port conflicts detected"
 fi
 
-# Start services
-if [ "$DRY_RUN" = true ]; then
-    print_status "[DRY RUN] Would start DuckLake services"
-else
-    print_status "Starting DuckLake services..."
+# Clean up existing installation if present
+cleanup_existing_installation() {
+    local containers_to_remove=(
+        "ducklake-postgres-${INSTANCE_NAME}"
+        "ducklake-minio-${INSTANCE_NAME}" 
+        "ducklake-mathesar-${INSTANCE_NAME}"
+    )
     
+    local volumes_to_remove=(
+        "postgres_data_${INSTANCE_NAME}"
+        "minio_data_${INSTANCE_NAME}"
+        "mathesar_static_${INSTANCE_NAME}"
+        "mathesar_media_${INSTANCE_NAME}"
+    )
+    
+    local network_to_remove="ducklake-net-${INSTANCE_NAME}"
+    
+    # Check if any containers exist
+    local existing_containers=""
+    for container in "${containers_to_remove[@]}"; do
+        if podman ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
+            existing_containers="$existing_containers $container"
+        fi
+    done
+    
+    # Check if any volumes exist
+    local existing_volumes=""
+    for volume in "${volumes_to_remove[@]}"; do
+        if podman volume ls --format "{{.Name}}" | grep -q "^${volume}$"; then
+            existing_volumes="$existing_volumes $volume"
+        fi
+    done
+    
+    if [ -n "$existing_containers" ] || [ -n "$existing_volumes" ]; then
+        separator
+        section "Cleaning Up Previous Installation"
+        
+        if [ -n "$existing_containers" ]; then
+            show_spinner "Removing existing containers" "
+                for container in $existing_containers; do
+                    podman stop \"\$container\" 2>/dev/null || true
+                    podman rm \"\$container\" 2>/dev/null || true
+                done
+            "
+        fi
+        
+        if [ -n "$existing_volumes" ]; then
+            show_spinner "Removing existing volumes" "
+                for volume in $existing_volumes; do
+                    podman volume rm \"\$volume\" 2>/dev/null || true
+                done
+            "
+        fi
+        
+        # Remove network if it exists
+        if podman network ls --format "{{.Name}}" | grep -q "^${network_to_remove}$"; then
+            show_spinner "Removing network" "podman network rm \"$network_to_remove\" 2>/dev/null || true"
+        fi
+        
+        success "Previous installation cleaned up"
+    fi
+}
+
+# Clean up any existing installation
+cleanup_existing_installation
+
+# Start services
+separator
+section "Starting DuckLake Services"
+
+if [ "$DRY_RUN" = true ]; then
+    show_spinner "Creating container network" "sleep 0.5"
+    show_spinner "Starting PostgreSQL container" "sleep 0.5"
+    show_spinner "Starting MinIO container" "sleep 0.5"
+    show_spinner "Starting Mathesar web UI" "sleep 0.5"
+    show_spinner "Waiting for containers to initialize" "sleep 0.5"
+    show_spinner "Creating MinIO bucket" "sleep 0.5"
+    success "All services started successfully"
+else
     # Detect if we need special userns flags for high UIDs
     current_uid=$(id -u)
     postgres_userns_flag=""
@@ -1937,11 +2035,11 @@ else
         minio_userns_flag="--userns=keep-id"
     fi
     
-    # Create a network for the containers
-    podman network create ducklake-net-${INSTANCE_NAME} 2>/dev/null || true
+    # Create network
+    show_spinner "Creating container network" "podman network create ducklake-net-${INSTANCE_NAME} 2>/dev/null || true"
     
-    # Start PostgreSQL with restart policy
-    podman run -d --name ducklake-postgres-${INSTANCE_NAME} --replace --restart=unless-stopped \
+    # Start PostgreSQL
+    show_spinner "Starting PostgreSQL container" "podman run -d --name ducklake-postgres-${INSTANCE_NAME} --replace --restart=unless-stopped \
         --network ducklake-net-${INSTANCE_NAME} $postgres_userns_flag \
         -e POSTGRES_DB=${DB_NAME} \
         -e POSTGRES_USER=${DB_USER} \
@@ -1949,21 +2047,21 @@ else
         -e POSTGRES_HOST_AUTH_METHOD=trust \
         -p ${POSTGRES_PORT}:5432 \
         -v postgres_data_${INSTANCE_NAME}:/var/lib/postgresql/data \
-        -v $(pwd)/init.sql:/docker-entrypoint-initdb.d/init.sql:ro \
-        docker.io/library/postgres:15 &
+        -v \$(pwd)/init.sql:/docker-entrypoint-initdb.d/init.sql:ro \
+        docker.io/library/postgres:15 >/dev/null 2>&1"
     
-    # Start MinIO with restart policy
-    podman run -d --name ducklake-minio-${INSTANCE_NAME} --replace --restart=unless-stopped \
+    # Start MinIO
+    show_spinner "Starting MinIO container" "podman run -d --name ducklake-minio-${INSTANCE_NAME} --replace --restart=unless-stopped \
         --network ducklake-net-${INSTANCE_NAME} $minio_userns_flag \
         -e MINIO_ROOT_USER=minioadmin \
         -e MINIO_ROOT_PASSWORD=minioadmin \
         -p ${MINIO_PORT}:9000 \
         -p ${MINIO_CONSOLE_PORT}:9001 \
         -v minio_data_${INSTANCE_NAME}:/data \
-        quay.io/minio/minio:latest server /data --console-address :9001 &
+        quay.io/minio/minio:latest server /data --console-address :9001 >/dev/null 2>&1"
     
-    # Start Mathesar web UI with restart policy (after postgres is ready)
-    podman run -d --name ducklake-mathesar-${INSTANCE_NAME} --replace --restart=unless-stopped \
+    # Start Mathesar
+    show_spinner "Starting Mathesar web UI" "podman run -d --name ducklake-mathesar-${INSTANCE_NAME} --replace --restart=unless-stopped \
         --network ducklake-net-${INSTANCE_NAME} \
         -e SECRET_KEY=ducklake-secret-key-change-in-production \
         -e DOMAIN_NAME=http://localhost:8000 \
@@ -1973,20 +2071,21 @@ else
         -e POSTGRES_HOST=ducklake-postgres-${INSTANCE_NAME} \
         -e POSTGRES_PORT=5432 \
         -e DJANGO_SETTINGS_MODULE=config.settings.production \
-        -e ALLOWED_HOSTS="*" \
+        -e ALLOWED_HOSTS='*' \
         -e DEBUG=false \
-        -e MATHESAR_DATABASES="ducklake_catalog|postgresql://${DB_USER}:${DB_PASS}@ducklake-postgres-${INSTANCE_NAME}:5432/${DB_NAME}" \
+        -e MATHESAR_DATABASES='ducklake_catalog|postgresql://${DB_USER}:${DB_PASS}@ducklake-postgres-${INSTANCE_NAME}:5432/${DB_NAME}' \
         -p 8000:8000 \
         -v mathesar_static_${INSTANCE_NAME}:/code/static \
         -v mathesar_media_${INSTANCE_NAME}:/code/media \
-        docker.io/mathesar/mathesar:latest &
+        docker.io/mathesar/mathesar:latest >/dev/null 2>&1"
     
-    wait
+    # Wait for containers to initialize
+    gum spin --spinner="dot" --title="Waiting for containers to initialize" -- sleep 3
     
-    # Create bucket
-    sleep 5
-    podman exec ducklake-minio-${INSTANCE_NAME} mc alias set local http://localhost:9000 minioadmin minioadmin 2>/dev/null || true
-    podman exec ducklake-minio-${INSTANCE_NAME} mc mb local/${BUCKET_NAME} 2>/dev/null || true
+    # Setup MinIO bucket
+    show_spinner "Creating MinIO bucket" "podman exec ducklake-minio-${INSTANCE_NAME} mc alias set local http://localhost:9000 minioadmin minioadmin >/dev/null 2>&1 && \
+        podman exec ducklake-minio-${INSTANCE_NAME} mc mb local/${BUCKET_NAME} >/dev/null 2>&1 || true"
+    success "All services started successfully"
 fi
 
 # Enhanced service checking with better error handling
@@ -2124,15 +2223,21 @@ check_mathesar() {
 }
 
 # Check services with retry logic
-if ! retry_command 3 5 "PostgreSQL startup" "check_postgres"; then
+separator
+section "Verifying Service Health"
+
+show_spinner "Checking PostgreSQL health" "sleep 2"
+if ! check_postgres; then
     exit 1
 fi
 
-if ! retry_command 3 5 "MinIO startup" "check_minio"; then
+show_spinner "Checking MinIO health" "sleep 2"  
+if ! check_minio; then
     exit 1
 fi
 
-if ! retry_command 3 5 "Mathesar startup" "check_mathesar"; then
+show_spinner "Checking Mathesar health" "sleep 3"
+if ! check_mathesar; then
     exit 1
 fi
 
@@ -2144,183 +2249,44 @@ if [ -z "$SERVER_IP" ]; then
 fi
 
 # Print connection information
-echo ""
-print_header "DuckLake Server Setup Complete!"
-echo ""
-
-if command -v gum >/dev/null 2>&1; then
-    gum style --foreground 33 --bold "Services Status:"
-    gum style --foreground 255 "  PostgreSQL Catalog: $SERVER_IP:$POSTGRES_PORT"
-    gum style --foreground 255 "  MinIO Object Storage: $SERVER_IP:$MINIO_PORT"
-    gum style --foreground 255 "  MinIO Web Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT"
-    gum style --foreground 255 "  Mathesar Database UI: http://$SERVER_IP:8000"
-    echo ""
-    gum style --foreground 33 --bold "Credentials:"
-    gum style --foreground 255 "  PostgreSQL: ${DB_USER} / ${DB_PASS}"
-    gum style --foreground 255 "  MinIO: minioadmin / minioadmin"
-    echo ""
-    gum style --foreground 33 --bold "Remote Connection Code:"
-    gum style --foreground 240 "Copy this into your local Python/DuckDB environment:"
-else
-    echo "Services Status:"
-    echo "  PostgreSQL Catalog: $SERVER_IP:$POSTGRES_PORT"
-    echo "  MinIO Object Storage: $SERVER_IP:$MINIO_PORT"
-    echo "  MinIO Web Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT"
-    echo "  Mathesar Database UI: http://$SERVER_IP:8000"
-    echo ""
-    echo "Credentials:"
-    echo "  PostgreSQL: ${DB_USER} / ${DB_PASS}"
-    echo "  MinIO: minioadmin / minioadmin"
-    echo ""
-    echo "Remote Connection Code:"
-    echo "Copy this into your local Python/DuckDB environment:"
-fi
-
-echo ""
 separator
-if command -v gum >/dev/null 2>&1; then
-    gum style --foreground 240 --margin "1 0" \
-'import duckdb
+section "DuckLake Server Setup Complete!"
 
-# Connect to DuckDB
-conn = duckdb.connect:
-
-# Install required extensions
-conn.execute("INSTALL ducklake")
-conn.execute("INSTALL postgres") 
-conn.execute("INSTALL httpfs")
-conn.execute("LOAD ducklake")
-conn.execute("LOAD postgres")
-conn.execute("LOAD httpfs")
-
-# Configure S3 connection to your MinIO server
-conn.execute(f"""
-    SET s3_region='"'"'us-east-1'"'"';
-    SET s3_access_key_id='"'"'minioadmin'"'"';
-    SET s3_secret_access_key='"'"'minioadmin'"'"';
-    SET s3_endpoint='"'"''"$SERVER_IP"':'"$MINIO_PORT"''"'"';
-    SET s3_use_ssl=false;
-    SET s3_url_style='"'"'path'"'"';
-""")
-
-# Connect to your DuckLake server
-conn.execute(f"""
-    ATTACH '"'"'ducklake:postgres:dbname='"${DB_NAME}"'
-            user='"${DB_USER}"'  
-            password='"${DB_PASS}"'
-            host='"$SERVER_IP"'
-            port='"$POSTGRES_PORT"''"'"' AS remote_ducklake
-            (DATA_PATH '"'"'s3://'"${BUCKET_NAME}"'/'"${DATA_PATH}"''"'"');
-""")
-
-# Test the connection
-print("Connected to remote DuckLake!")
-
-# Example: Create a table and insert data
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS remote_ducklake.test_table (
-        id INTEGER,
-        name VARCHAR,
-        timestamp TIMESTAMP
-    );
-""")
-
-conn.execute("""
-    INSERT INTO remote_ducklake.test_table (id, name, timestamp) 
-    VALUES (1, '"'"'Remote Test'"'"', CURRENT_TIMESTAMP), (2, '"'"'DuckLake Demo'"'"', CURRENT_TIMESTAMP);
-""")
-
-# Query the data
-result = conn.execute("SELECT * FROM remote_ducklake.test_table").fetchall:
-print("Data:", result)'
-else
-    cat << EOF
-import duckdb
-
-# Connect to DuckDB
-conn = duckdb.connect:
-
-# Install required extensions
-conn.execute("INSTALL ducklake")
-conn.execute("INSTALL postgres") 
-conn.execute("INSTALL httpfs")
-conn.execute("LOAD ducklake")
-conn.execute("LOAD postgres")
-conn.execute("LOAD httpfs")
-
-# Configure S3 connection to your MinIO server
-conn.execute(f"""
-    SET s3_region='us-east-1';
-    SET s3_access_key_id='minioadmin';
-    SET s3_secret_access_key='minioadmin';
-    SET s3_endpoint='$SERVER_IP:$MINIO_PORT';
-    SET s3_use_ssl=false;
-    SET s3_url_style='path';
-""")
-
-# Connect to your DuckLake server
-conn.execute(f"""
-    ATTACH 'ducklake:postgres:dbname=${DB_NAME}
-            user=${DB_USER}  
-            password=${DB_PASS}
-            host=$SERVER_IP
-            port=$POSTGRES_PORT' AS remote_ducklake
-            (DATA_PATH 's3://${BUCKET_NAME}/${DATA_PATH}');
-""")
-
-# Test the connection
-print("Connected to remote DuckLake!")
-
-# Example: Create a table and insert data
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS remote_ducklake.test_table (
-        id INTEGER,
-        name VARCHAR,
-        timestamp TIMESTAMP
-    );
-""")
-
-conn.execute("""
-    INSERT INTO remote_ducklake.test_table (id, name, timestamp) 
-    VALUES (1, 'Remote Test', CURRENT_TIMESTAMP), (2, 'DuckLake Demo', CURRENT_TIMESTAMP);
-""")
-
-# Query the data
-result = conn.execute("SELECT * FROM remote_ducklake.test_table").fetchall:
-print("Data:", result)
-EOF
-fi
+success "All services are running and healthy"
 
 separator
-echo ""
+section "Services Status"
+muted "  PostgreSQL Catalog: $SERVER_IP:$POSTGRES_PORT"
+muted "  MinIO Object Storage: $SERVER_IP:$MINIO_PORT" 
+muted "  MinIO Web Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT"
+muted "  Mathesar Database UI: http://$SERVER_IP:8000"
 
-if command -v gum >/dev/null 2>&1; then
-    gum style --foreground 33 --bold "Server Management Commands:"
-    gum style --foreground 240 "  Status:    $0 --status"
-    gum style --foreground 240 "  Stop:      $0 --stop"
-    gum style --foreground 240 "  Restart:   $0 --restart"
-    gum style --foreground 240 "  Logs:      $0 --logs postgres"
-    gum style --foreground 240 "  Cleanup:   $0 --clean"
-    echo ""
-    gum style --foreground 33 --bold "Web Interfaces:"
-    gum style --foreground 240 "  MinIO Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT (minioadmin/minioadmin)"
-    gum style --foreground 240 "  Mathesar Database UI: http://$SERVER_IP:8000"
-    echo ""
-    gum style --foreground 33 --bold "Installation Directory: $DUCKLAKE_DIR"
-else
-    echo "Server Management Commands:"
-    echo "  Status:    $0 --status"
-    echo "  Stop:      $0 --stop"
-    echo "  Restart:   $0 --restart"
-    echo "  Logs:      $0 --logs postgres"
-    echo "  Cleanup:   $0 --clean"
-    echo ""
-    echo "Web Interfaces:"
-    echo "  MinIO Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT (minioadmin/minioadmin)"
-    echo "  Mathesar Database UI: http://$SERVER_IP:8000"
-    echo ""
-    echo "Installation Directory: $DUCKLAKE_DIR"
-fi
+separator
+section "Credentials"
+muted "  PostgreSQL: ${DB_USER} / ${DB_PASS}"
+muted "  MinIO: minioadmin / minioadmin"
 
-echo ""
-print_header "Ready for remote DuckLake connections!"
+separator  
+section "Remote Connection Code"
+success "Python connection script: ${INSTALL_DIR}/connect.py"
+muted "  Run: cd ${INSTALL_DIR} && python connect.py"
+
+separator
+section "Server Management Commands"
+muted "  Status:    $0 --status"
+muted "  Stop:      $0 --stop" 
+muted "  Restart:   $0 --restart"
+muted "  Logs:      $0 --logs postgres"
+muted "  Cleanup:   $0 --clean"
+
+separator
+section "Web Interfaces"
+muted "  MinIO Console: http://$SERVER_IP:$MINIO_CONSOLE_PORT (minioadmin/minioadmin)"
+muted "  Mathesar Database UI: http://$SERVER_IP:8000"
+
+separator
+section "Installation Directory"
+muted "  $DUCKLAKE_DIR"
+
+separator
+success "Ready for remote DuckLake connections!"
